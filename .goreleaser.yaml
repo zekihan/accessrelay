@@ -1,0 +1,29 @@
+version: 2
+project_name: accessrelay
+builds:
+  - id: all
+    main: ./cmd/accessrelay
+    binary: accessrelay
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+archives:
+  - id: all
+    ids: [all]
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE, LICENSES/**, README.md, examples/**, docs/**, charts/accessrelay/**]
+checksum:
+  name_template: checksums.txt
+changelog:
+  sort: asc
+release:
+  github:
+    owner: zekihan
+    name: accessrelay
+  ids: [all]
+  extra_files:
+    - glob: release-assets/accessrelay-*.tgz

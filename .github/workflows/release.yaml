@@ -1,0 +1,105 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    uses: ./.github/workflows/pr.yaml
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Require matching release versions
+        id: version
+        run: echo "version=$(./scripts/release_version.sh)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4.4.0
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/metadata-action@v6.2.0
+        id: meta
+        with:
+          images: |
+            docker.io/zekihan/accessrelay
+            ghcr.io/zekihan/accessrelay
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}
+            type=sha
+      - uses: docker/login-action@v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
+      - uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.0
+      - name: Publish OCI chart
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          helm package charts/accessrelay --destination dist/charts
+          helm push "dist/charts/accessrelay-${VERSION}.tgz" oci://ghcr.io/zekihan/charts
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.0
+      - name: Verify anonymous release pulls
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: ./scripts/verify_release.sh "$VERSION"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: verified-chart
+          path: dist/verified/accessrelay-*.tgz
+  release:
+    needs: [checks, publish, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: verified-chart
+          path: release-assets
+      - uses: goreleaser/goreleaser-action@v7.2.3
+        with:
+          version: v2.18.2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
