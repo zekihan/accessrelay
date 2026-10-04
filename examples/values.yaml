@@ -1,0 +1,27 @@
+connectionSecret: accessrelay-connection
+config:
+  collection:
+    source:
+      cluster: example
+      namespace: traefik
+      container: traefik
+  report:
+    websocketURL: wss://accessrelay.example.invalid/ws
+ingress:
+  enabled: true
+  host: accessrelay.example.invalid
+  tls:
+    - hosts: [accessrelay.example.invalid]
+      secretName: accessrelay-tls
+networkPolicy:
+  ingressPeers:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-system
+  victoriaLogsPeers:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: logs
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: victoria-logs-single

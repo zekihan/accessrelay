@@ -1,0 +1,109 @@
+nameOverride: ''
+fullnameOverride: ''
+replicaCount: 1
+image:
+  repository: ghcr.io/zekihan/accessrelay
+  tag: ''
+  digest: ''
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+connectionSecret: accessrelay-connection
+terminationGracePeriodSeconds: 45
+podAnnotations: {}
+podLabels: {}
+resources:
+  requests:
+    cpu: 300m
+    memory: 384Mi
+    ephemeral-storage: 1Gi
+  limits:
+    memory: 1536Mi
+    ephemeral-storage: 3Gi
+storage:
+  existingClaim: ''
+  size: 2Gi
+  storageClass: ''
+  annotations: {}
+  labels: {}
+runtimeSizeLimit: 3Gi
+tmpSizeLimit: 64Mi
+service:
+  port: 8080
+  type: ClusterIP
+  annotations: {}
+probes:
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 360
+  liveness:
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 6
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+ingress:
+  enabled: false
+  className: ''
+  annotations: {}
+  host: accessrelay.example.invalid
+  tls: []
+  extraPaths: []
+authService:
+  enabled: false
+  name: proxy-auth
+  externalName: ''
+  port: 9000
+networkPolicy:
+  enabled: true
+  ingressPeers: []
+  victoriaLogsPeers: []
+  victoriaLogsPort: 9428
+  extraIngress: []
+  extraEgress: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+config:
+  {
+    "listen": ":8080",
+    "stateDir": "/state",
+    "runtimeDir": "/runtime",
+    "connectionFile": "/connection/connection.json",
+    "goaccessBinary": "goaccess",
+    "collection": {
+      "source": {
+        "cluster": "example",
+        "namespace": "traefik",
+        "container": "traefik"
+      },
+      "pollInterval": "5s",
+      "ingestionDelay": "30s",
+      "overlap": "5m",
+      "reconciliationInterval": "1h",
+      "backfillWindow": "5m",
+      "minimumWindow": "1s",
+      "queryTimeout": "20s",
+      "staleAfter": "2m",
+      "maxLineBytes": 1048576,
+      "maxWindowBytes": 268435456
+    },
+    "report": {
+      "historyDays": 7,
+      "jobs": 6,
+      "chunkSize": 8192,
+      "websocketURL": "ws://localhost:8080/ws",
+      "configOverrides": {},
+      "extraBrowsers": []
+    },
+    "limits": {
+      "maxRuntimeBytes": 2684354560,
+      "maxDatabaseBytes": 1610612736,
+      "maxReplayBytes": 1073741824,
+      "maxReportBytes": 67108864,
+      "diagnosticBytes": 8388608,
+      "reserveBytes": 33554432
+    }
+  }

@@ -1,0 +1,351 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "listen",
+        "stateDir",
+        "runtimeDir",
+        "connectionFile",
+        "goaccessBinary",
+        "collection",
+        "report",
+        "limits"
+      ],
+      "properties": {
+        "listen": {
+          "const": ":8080"
+        },
+        "stateDir": {
+          "const": "/state"
+        },
+        "runtimeDir": {
+          "const": "/runtime"
+        },
+        "connectionFile": {
+          "const": "/connection/connection.json"
+        },
+        "goaccessBinary": {
+          "const": "goaccess"
+        },
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pollInterval",
+            "ingestionDelay",
+            "overlap",
+            "reconciliationInterval",
+            "backfillWindow",
+            "minimumWindow",
+            "queryTimeout",
+            "staleAfter",
+            "source",
+            "maxLineBytes",
+            "maxWindowBytes"
+          ],
+          "properties": {
+            "pollInterval": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "ingestionDelay": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "overlap": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "reconciliationInterval": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "backfillWindow": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "minimumWindow": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "queryTimeout": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "staleAfter": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
+            },
+            "source": {
+              "type": "object",
+              "required": [
+                "cluster",
+                "namespace",
+                "container"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "cluster": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "namespace": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "container": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "maxLineBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 16777216
+            },
+            "maxWindowBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 1073741824
+            }
+          }
+        },
+        "report": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "historyDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 366
+            },
+            "jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "chunkSize": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "websocketURL": {
+              "type": "string",
+              "pattern": "^wss?://[^\\r\\n ]+$"
+            },
+            "configOverrides": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "agent-list": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "http-method": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "http-protocol": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "anonymize-ip": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "ignore-crawlers": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "unknowns-as-crawlers": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "real-os": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "with-output-resolver": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "no-query-string": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "date-spec": {
+                  "type": "string",
+                  "enum": [
+                    "date",
+                    "hr"
+                  ]
+                },
+                "hour-spec": {
+                  "type": "string",
+                  "enum": [
+                    "hr",
+                    "min"
+                  ]
+                },
+                "all-static-files": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "4xx-to-unique-count": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "double-decode": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                },
+                "crawlers-only": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                }
+              }
+            },
+            "extraBrowsers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^\\r\\n]+\\t[^\\r\\n]+$"
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxDatabaseBytes",
+            "maxReplayBytes",
+            "maxReportBytes",
+            "diagnosticBytes",
+            "reserveBytes",
+            "maxRuntimeBytes"
+          ],
+          "properties": {
+            "maxDatabaseBytes": {
+              "type": "integer",
+              "minimum": 1048576
+            },
+            "maxReplayBytes": {
+              "type": "integer",
+              "minimum": 1048576
+            },
+            "maxReportBytes": {
+              "type": "integer",
+              "minimum": 1048576
+            },
+            "diagnosticBytes": {
+              "type": "integer",
+              "minimum": 128
+            },
+            "reserveBytes": {
+              "type": "integer",
+              "minimum": 1048576
+            },
+            "maxRuntimeBytes": {
+              "type": "integer",
+              "minimum": 1048576
+            }
+          }
+        }
+      }
+    },
+    "connectionSecret": {
+      "type": "string",
+      "minLength": 1
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 30
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "victoriaLogsPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}
