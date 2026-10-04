@@ -4,7 +4,10 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -89,3 +92,78 @@ c=sqlite3.connect(sys.argv[1]);assert c.execute('select sum(occurrences) from ev
 	}
 }
 func jsonNumber(n int64) string { b, _ := json.Marshal(n); return string(b) }
+
+// TestRetainedDatabaseCopy is opt-in: its input must be an off-volume SQLite backup.
+// Both readers operate on new copies; the supplied backup is never opened for writing.
+func TestRetainedDatabaseCopy(t *testing.T) {
+	backup := os.Getenv("ACCESSRELAY_DATABASE_FIXTURE")
+	if backup == "" {
+		t.Skip("no isolated retained-database fixture supplied")
+	}
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.Create(filepath.Join(state, "events.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.Copy(output, input); err != nil {
+		t.Fatal(err)
+	}
+	if err = output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	replay := filepath.Join(root, "go.log")
+	f, err := os.Create(replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Export(f, 0, true, 1073741824); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a, b, err := s.Counts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(root, "python.log")
+	cmd := exec.Command("python3", "-c", `import sqlite3,sys
+c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+with open(sys.argv[2],'w') as f:
+ for message,copies in c.execute('SELECT message,occurrences FROM events ORDER BY time_ns,id'):
+  for _ in range(copies): f.write(message+'\n')
+`, s.Path, legacy)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(err, string(output))
+	}
+	hash := func(path string) string {
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		h := sha256.New()
+		if _, err = io.Copy(h, file); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	if hash(replay) != hash(legacy) {
+		t.Fatal("retained database replay differs from legacy")
+	}
+	t.Logf("verified %d event identities, %d copies, identical legacy/Go replay", a, b)
+}
