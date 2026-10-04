@@ -95,7 +95,8 @@ class RuntimeTests(unittest.TestCase):
             (legacy / "browsers.list").write_text((ROOT / "internal/assets/browsers.list").read_text())
             (legacy / "goaccess.conf").write_text((ROOT / "internal/assets/goaccess.conf").read_text().replace("{{WS}}", "ws://localhost:8080/ws").replace("{{DAYS}}", "1").replace("{{BROWSERS}}", "/config/browsers.list"))
             (legacy / "collector.json").write_text(json.dumps(dict(config["collection"], historyDays=1, connectionFile="/connection/connection.json")))
-            common = ["--user", "1000:1000", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,size=67108864,uid=1000,gid=1000"]
+            fixture_uid, fixture_gid = (os.getuid(), os.getgid()) if os.getuid() else (1000, 1000)
+            common = ["--user", f"{fixture_uid}:{fixture_gid}", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", f"/tmp:rw,size=67108864,uid={fixture_uid},gid={fixture_gid}"]
 
             def mounts(kind):
                 return [arg for directory in ["state", "runtime", "config", "connection"] for arg in ["-v", f"{root}/{kind}/{directory}:/{directory}" + (":ro" if directory in {"config", "connection"} else "")]]
@@ -127,9 +128,9 @@ class RuntimeTests(unittest.TestCase):
                     wait(lambda: report(request(kind))["general"]["valid_requests"] == expected)
 
             try:
-                docker("run", "-d", "--name", names["app"], *common, *mounts("app"), "-p", "127.0.0.1::8080", IMAGE)
+                docker("run", "-d", "--name", names["app"], "--add-host", "host.docker.internal:host-gateway", *common, *mounts("app"), "-p", "127.0.0.1::8080", IMAGE)
                 started.append(names["app"])
-                docker("run", "-d", "--name", names["web"], *common, *mounts("legacy"), "-p", "127.0.0.1::8080", "--entrypoint", "nginx", NGINX, "-c", "/config/nginx.conf", "-g", "daemon off;")
+                docker("run", "-d", "--name", names["web"], "--add-host", "host.docker.internal:host-gateway", *common, *mounts("legacy"), "-p", "127.0.0.1::8080", "--entrypoint", "nginx", NGINX, "-c", "/config/nginx.conf", "-g", "daemon off;")
                 started.append(names["web"])
                 for key, image, command in [("goaccess", GOACCESS, ["sh", "/config/goaccess-start.sh"]), ("collector", PYTHON, ["python", "-u", "/config/collector.py"])]:
                     docker("run", "-d", "--name", names[key], *common, *mounts("legacy"), "--network", "container:" + names["web"], "-e", "PYTHONDONTWRITEBYTECODE=1", "--entrypoint", command[0], image, *command[1:])
@@ -221,7 +222,7 @@ class RuntimeTests(unittest.TestCase):
                 for name in reversed(started):
                     docker("rm", "-f", name, check=False)
                 for kind in ["app", "legacy"]:
-                    docker("run", "--rm", "--user", "1000:1000", "--network", "none", *mounts(kind), "--entrypoint", "sh", IMAGE, "-c", "rm -rf /state/* /runtime/*", check=False)
+                    docker("run", "--rm", "--user", f"{fixture_uid}:{fixture_gid}", "--network", "none", *mounts(kind), "--entrypoint", "sh", IMAGE, "-c", "rm -rf /state/* /runtime/*", check=False)
                 backend.shutdown()
                 backend.server_close()
                 thread.join()
