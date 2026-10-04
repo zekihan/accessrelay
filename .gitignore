@@ -1,0 +1,8 @@
+/dist/
+/tmp/
+/release-assets/
+.idea/
+.env
+*.tfplan
+__pycache__/
+*.pyc

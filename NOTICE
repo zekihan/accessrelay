@@ -1,0 +1,11 @@
+accessrelay
+Copyright 2026 zekihan
+
+The collection contract, report settings and behavioral fixtures derive from
+charts/goaccess in github.com/zekihan/argocd at revision
+41326211e9777480ecb337d5af4a17793108d39d, Copyright zekihan, Apache-2.0.
+See LICENSES/Apache-2.0.txt. The application is AGPL-3.0-or-later.
+
+GoAccess 1.12 is bundled as a separate executable, Copyright Gerardo Orellana
+and contributors, MIT licensed. Its source and license are included in the image
+at /usr/share/accessrelay/goaccess. See LICENSES/GoAccess-MIT.txt.

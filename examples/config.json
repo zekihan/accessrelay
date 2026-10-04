@@ -1,0 +1,40 @@
+{
+  "listen": ":8080",
+  "stateDir": "/state",
+  "runtimeDir": "/runtime",
+  "connectionFile": "/connection/connection.json",
+  "goaccessBinary": "goaccess",
+  "collection": {
+    "source": {
+      "cluster": "example",
+      "namespace": "traefik",
+      "container": "traefik"
+    },
+    "pollInterval": "5s",
+    "ingestionDelay": "30s",
+    "overlap": "5m",
+    "reconciliationInterval": "1h",
+    "backfillWindow": "5m",
+    "minimumWindow": "1s",
+    "queryTimeout": "20s",
+    "staleAfter": "2m",
+    "maxLineBytes": 1048576,
+    "maxWindowBytes": 268435456
+  },
+  "report": {
+    "historyDays": 7,
+    "jobs": 6,
+    "chunkSize": 8192,
+    "websocketURL": "ws://localhost:8080/ws",
+    "configOverrides": {},
+    "extraBrowsers": []
+  },
+  "limits": {
+    "maxDatabaseBytes": 1610612736,
+    "maxReplayBytes": 1073741824,
+    "maxReportBytes": 67108864,
+    "diagnosticBytes": 8388608,
+    "reserveBytes": 33554432,
+    "maxRuntimeBytes": 2684354560
+  }
+}
