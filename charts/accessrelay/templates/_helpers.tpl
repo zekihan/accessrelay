@@ -7,6 +7,9 @@
 {{- define "accessrelay.selector" -}}
 app.kubernetes.io/name: {{ include "accessrelay.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- with .Values.selectorLabels }}
+{{ toYaml . }}
+{{- end }}
 {{- end -}}
 {{- define "accessrelay.labels" -}}
 {{ include "accessrelay.selector" . }}

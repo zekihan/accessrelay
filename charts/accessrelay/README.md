@@ -7,6 +7,7 @@ NetworkPolicy. No RBAC resources or service-account tokens are needed.
 | values | default / purpose |
 | --- | --- |
 | `image.repository`, `tag`, `digest` | GHCR; tag defaults to chart `appVersion`; optional digest pin |
+| `selectorLabels` | extra immutable selector labels for preserving existing Deployments; base name/instance labels cannot be overridden |
 | `replicaCount` | 1; only 0 or 1 permitted; strategy is always Recreate |
 | `connectionSecret` | existing Secret with `connection.json`; mounted as a directory to allow rotation |
 | `storage.existingClaim` | reuse an existing retained claim; suppresses PVC creation |

@@ -1,6 +1,7 @@
 nameOverride: ''
 fullnameOverride: ''
 replicaCount: 1
+selectorLabels: {}
 image:
   repository: ghcr.io/zekihan/accessrelay
   tag: ''

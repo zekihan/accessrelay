@@ -24,13 +24,13 @@ credentials in values, URLs, container arguments, or committed files.
 
 ```sh
 helm upgrade --install accessrelay oci://ghcr.io/zekihan/charts/accessrelay \
-  --version 0.1.0 --namespace accessrelay --create-namespace \
+  --version 0.1.1 --namespace accessrelay --create-namespace \
   --values examples/values.yaml
 kubectl -n accessrelay port-forward service/accessrelay 8080:8080
 ```
 
-Images: `docker.io/zekihan/accessrelay:0.1.0` and
-`ghcr.io/zekihan/accessrelay:0.1.0`, for Linux amd64 and arm64.
+Images: `docker.io/zekihan/accessrelay:0.1.1` and
+`ghcr.io/zekihan/accessrelay:0.1.1`, for Linux amd64 and arm64.
 The [chart reference](charts/accessrelay/README.md) describes all configuration.
 Set the source cluster and the network policy's backend and ingress peers before
 installing. Default policies allow DNS and deny other inbound/outbound traffic.

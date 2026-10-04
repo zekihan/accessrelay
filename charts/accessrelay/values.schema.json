@@ -346,6 +346,20 @@
           "maximum": 65535
         }
       }
+    },
+    "selectorLabels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "app.kubernetes.io/name",
+            "app.kubernetes.io/instance"
+          ]
+        }
+      }
     }
   }
 }
