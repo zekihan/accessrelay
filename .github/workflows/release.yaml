@@ -93,7 +93,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: verified-chart
           path: release-assets
