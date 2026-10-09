@@ -76,7 +76,7 @@ jobs:
         env:
           VERSION: ${{ needs.publish.outputs.version }}
         run: ./scripts/verify_release.sh "$VERSION"
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: verified-chart
           path: dist/verified/accessrelay-*.tgz
