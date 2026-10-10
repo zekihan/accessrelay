@@ -99,7 +99,7 @@ jobs:
           path: release-assets
       - uses: goreleaser/goreleaser-action@v7.2.3
         with:
-          version: v2.18.2
+          version: v2.18.3
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
