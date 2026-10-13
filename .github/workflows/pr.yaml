@@ -30,7 +30,7 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - run: make test test/race test/integration build
-      - uses: goreleaser/goreleaser-action@v7.2.3
+      - uses: goreleaser/goreleaser-action@v7.3.0
         with:
           install-only: true
           version: v2.18.3
