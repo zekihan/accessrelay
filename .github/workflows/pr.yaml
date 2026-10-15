@@ -50,7 +50,7 @@ jobs:
           cache: false
       - uses: azure/setup-helm@v5.0.1
         with:
-          version: v4.3.0
+          version: v4.3.1
       - run: |
           python3 -m venv "$RUNNER_TEMP/chart-venv"
           "$RUNNER_TEMP/chart-venv/bin/pip" install -r tests/helm/requirements.txt
