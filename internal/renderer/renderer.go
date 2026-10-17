@@ -31,7 +31,7 @@ type Renderer struct {
 	Config     config.Config
 	mu         sync.Mutex
 	cmd        *exec.Cmd
-	done       chan error
+	done       chan struct{}
 	generation string
 	output     string
 	retry      time.Time
@@ -111,9 +111,13 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 	}
 	r.cmd = cmd
 	r.generation = generation
-	r.done = make(chan error, 1)
+	r.done = make(chan struct{})
 	done := r.done
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		// Completion drives the supervisor state machine, not the exit status.
+		_ = cmd.Wait()
+		close(done)
+	}()
 	r.status.Running = true
 	r.status.Ready = false
 	r.status.Error = ""
@@ -141,6 +145,8 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 	_ = r.cmd.Process.Signal(os.Interrupt)
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
+	// Shutdown may terminate the child, so its exit error is expected.
+	// Complete-file validation below decides whether its final report is publishable.
 	select {
 	case <-r.done:
 	case <-ctx.Done():
