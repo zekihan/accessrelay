@@ -63,8 +63,18 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 			t.Error("redirect followed")
 		}
 		_ = r.ParseForm()
-		if !strings.Contains(r.Form.Get("query"), "allow_partial_response=false") || r.Form.Get("end") != Timestamp(end) {
+		query := r.Form.Get("query")
+		if !strings.Contains(query, "allow_partial_response=false") || r.Form.Get("end") != Timestamp(end) {
 			t.Error(r.Form)
+		}
+		for _, filter := range []string{
+			`cluster:="fix\"\\\\edge"`,
+			`kubernetes.namespace_name:="team\"\\\\prod"`,
+			`kubernetes.container_name:="api\"\\\\worker"`,
+		} {
+			if !strings.Contains(query, filter) {
+				t.Errorf("query missing exact source filter %q: %s", filter, query)
+			}
 		}
 		w.Header().Set("Location", "/leak")
 		n := len(body)
@@ -79,7 +89,9 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	c := config.Default()
 	c.RuntimeDir = filepath.Join(root, "runtime")
 	c.ConnectionFile = filepath.Join(root, "connection.json")
-	c.Collection.Source.Cluster = "fixture"
+	c.Collection.Source.Cluster = `fix"\\edge`
+	c.Collection.Source.Namespace = `team"\\prod`
+	c.Collection.Source.Container = `api"\\worker`
 	client := New(c)
 	defer client.Close()
 	rotate := func(token string) {
@@ -132,7 +144,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatal("unbounded failed stages", entries)
 	}
-	if requests != 12 {
+	if requests != 14 {
 		t.Log(requests)
 	}
 	body = string(raw) + "\n" + string(raw) + "\n"
@@ -162,5 +174,30 @@ func TestOperationalAndInvalidCLF(t *testing.T) {
 		if op != tc.op || (e != nil) != tc.invalid {
 			t.Fatal(tc, op, e)
 		}
+	}
+}
+
+func TestDecodeRejectsUnpairedSurrogateEscapes(t *testing.T) {
+	ns, _ := ParseTimestamp("2026-10-01T00:01:00Z")
+	message, _ := json.Marshal(Line)
+	base := `{"_time":"2026-10-01T00:01:00Z","_stream_id":"%s","_msg":` + string(message) + `}`
+	for _, escaped := range []string{`\ud800`, `\udc00`, `\ud800\u0041`, `\ud800\ud800`} {
+		if _, _, err := Decode([]byte(fmt.Sprintf(base, escaped)), ns, ns+1); err == nil {
+			t.Fatalf("accepted malformed surrogate escape %s", escaped)
+		}
+	}
+	// A genuine replacement rune and a literal backslash-u sequence must still
+	// decode normally and remain distinct identities.
+	replacement, op, err := Decode([]byte(fmt.Sprintf(base, "�")), ns, ns+1)
+	if err != nil || op {
+		t.Fatal(op, err)
+	}
+	literal, op, err := Decode([]byte(fmt.Sprintf(base, `\\ud800`)), ns, ns+1)
+	if err != nil || op || literal.Digest == replacement.Digest {
+		t.Fatal(op, err)
+	}
+	paired, op, err := Decode([]byte(fmt.Sprintf(base, `\ud83d\ude00`)), ns, ns+1)
+	if err != nil || op || paired.Digest == replacement.Digest {
+		t.Fatal(op, err)
 	}
 }

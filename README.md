@@ -36,6 +36,10 @@ Set the source cluster and the network policy's backend and ingress peers before
 installing. Default policies allow DNS and deny other inbound/outbound traffic.
 TLS and authentication belong at your ingress. The service has no built-in
 account system and needs no Kubernetes API permissions.
+Browser WebSocket requests must have an Origin matching the public host, scheme,
+and port in `report.websocketURL` (with `ws`/`wss` mapped to `http`/`https`).
+Configure that URL for the address used by report viewers. Clients without an
+Origin header remain supported; origin validation does not replace authentication.
 
 For a standalone process, supply `--config /path/accessrelay.json` using
 [the example configuration](examples/config.json). GoAccess 1.12 must be on
@@ -47,10 +51,18 @@ bundles GoAccess and its dependencies; startup downloads nothing.
 
 Queries use exclusive `[start,end)` windows and explicitly prohibit partial
 responses. A response must end normally with complete, bounded NDJSON records.
+Cluster, namespace, and container names use exact field matching. This prevents
+similarly named sources from entering new query results; already retained rows
+are not reclassified and remain subject to normal retention.
+SQLite records the configured source identity and rejects subsequent changes
+with `source_mismatch`. Inherited databases are bound on first upgraded startup;
+verify their original source settings before adoption (see [operations](docs/operations.md)).
 Malformed records, missing source identity, embedded line breaks, oversized
 responses, truncated bodies and redirects fail the complete window. Timeout and
 size failures split windows down to `minimumWindow`. A failed half prevents
 advancement over that half; completed earlier halves remain committed.
+Unpaired Unicode surrogate escapes are rejected before decoding so different
+input records cannot collapse into the same event identity.
 
 Every response is staged on disposable storage before one SQLite transaction
 updates events, change records, the cursor, and the last-success timestamp.
@@ -92,6 +104,8 @@ snapshot, so regeneration and backend outages retain the last complete report.
 GoAccess sends new report data over WebSocket; its HTML snapshot is refreshed on
 renderer startup and graceful termination. The report shows collector freshness
 and retention gaps using `/status.json`.
+Collection continues into SQLite while report rendering is unavailable, subject
+to storage limits. Recovery rebuilds the report from committed records.
 
 If a cursor falls behind the retained dates, accessrelay records the lost interval
 and resumes from the retention boundary. Backend retention must cover the desired
@@ -104,9 +118,12 @@ upstream omissions cannot be reconstructed.
 Default state size is 2Gi, with a 1.5Gi database page budget and 32MiB free-space
 reserve. Runtime storage defaults to a 3Gi `emptyDir`, a 2.5Gi application budget,
 and a 1Gi limit per replay. A window response is limited to 256MiB, a line to 1MiB,
-a report to 64MiB, and each diagnostic file to 8MiB. Diagnostics are truncated
-in place every 250ms after exceeding the limit; short bursts can exceed that
-threshold between checks. Filesystem/volume quotas provide the absolute disk cap.
+a report to 64MiB, and each diagnostic snapshot to 8MiB. GoAccess writes to
+supervised FIFOs at its existing diagnostic paths. Read the bounded regular files
+`/state/logs/unknowns.txt.snapshot` and
+`/state/logs/invalid-requests.log.snapshot` for diagnostics. The supervisor drains
+the FIFOs without restarting GoAccess when a snapshot reaches its limit.
+Filesystem/volume quotas provide the absolute disk cap.
 SQLite reuses deleted pages; retention does not shrink its high-water file size.
 
 Measure after initial backfill, adjust limits together with volume capacity, and
@@ -123,6 +140,9 @@ bounded exponential backoff and rebuild from SQLite. Shutdown cancels requests,
 stops and reaps GoAccess, then releases the writer lock. Linux kills the child
 if the parent dies unexpectedly; on other operating systems run under a
 supervisor that terminates the whole process group after a hard parent failure.
+A renderer that does not produce a complete report and open its listener within
+five minutes is stopped and retried. Boolean report overrides are normalized to
+the spelling required by each GoAccess option.
 
 ## development and releases
 

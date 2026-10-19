@@ -28,3 +28,17 @@ func TestValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestGoAccessBooleanOverrideSpellingsRemainAccepted(t *testing.T) {
+	for key, value := range map[string]string{
+		"http-method": "true", "http-protocol": "no",
+		"anonymize-ip": "yes", "ignore-crawlers": "false",
+	} {
+		c := Default()
+		c.Collection.Source.Cluster = "fixture"
+		c.Report.ConfigOverrides[key] = value
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s=%s rejected: %v", key, value, err)
+		}
+	}
+}

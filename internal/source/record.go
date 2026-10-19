@@ -62,7 +62,7 @@ type Record struct {
 
 func Decode(raw []byte, start, end int64) (Record, bool, error) {
 	var r Record
-	if !utf8.Valid(raw) {
+	if !utf8.Valid(raw) || !validUnicodeEscapes(raw) {
 		return r, false, errors.New("invalid_record")
 	}
 	var row map[string]json.RawMessage
@@ -120,4 +120,76 @@ func Decode(raw []byte, start, end int64) (Record, bool, error) {
 	}
 	r.Digest = sha256.Sum256([]byte(encoded))
 	return r, false, nil
+}
+
+// encoding/json replaces unpaired UTF-16 surrogate escapes with U+FFFD. That
+// would make malformed input share an identity with a real replacement rune,
+// so reject such escapes before decoding while leaving escaped backslashes
+// untouched.
+func validUnicodeEscapes(raw []byte) bool {
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '"' {
+			continue
+		}
+		for i++; i < len(raw); i++ {
+			switch raw[i] {
+			case '"':
+				goto nextString
+			case '\\':
+				if i+1 >= len(raw) {
+					return false
+				}
+				if raw[i+1] != 'u' {
+					i++
+					continue
+				}
+				if i+6 > len(raw) {
+					return false
+				}
+				value, ok := hex4(raw[i+2 : i+6])
+				if !ok {
+					return false
+				}
+				if value >= 0xdc00 && value <= 0xdfff {
+					return false
+				}
+				if value >= 0xd800 && value <= 0xdbff {
+					if i+12 > len(raw) || raw[i+6] != '\\' || raw[i+7] != 'u' {
+						return false
+					}
+					low, ok := hex4(raw[i+8 : i+12])
+					if !ok || low < 0xdc00 || low > 0xdfff {
+						return false
+					}
+					i += 11
+				} else {
+					i += 5
+				}
+			}
+		}
+		return false
+	nextString:
+	}
+	return true
+}
+
+func hex4(b []byte) (uint16, bool) {
+	if len(b) != 4 {
+		return 0, false
+	}
+	var n uint16
+	for _, c := range b {
+		n <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			n |= uint16(c - '0')
+		case c >= 'a' && c <= 'f':
+			n |= uint16(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			n |= uint16(c-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return n, true
 }

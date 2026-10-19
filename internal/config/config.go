@@ -131,7 +131,15 @@ func (c Config) Validate() error {
 			if v != "hr" && v != "min" {
 				return errors.New("configuration_override")
 			}
+		case "http-method", "http-protocol":
+			// GoAccess parses these as yes/no settings. Older chart values also
+			// used true/false, so the renderer normalizes those spellings.
+			if v != "true" && v != "false" && v != "yes" && v != "no" {
+				return errors.New("configuration_override")
+			}
 		default:
+			// Keep accepting yes/no for existing values; the renderer converts
+			// them to GoAccess's true/false spelling for flag-style settings.
 			if v != "true" && v != "false" && v != "yes" && v != "no" {
 				return errors.New("configuration_override")
 			}

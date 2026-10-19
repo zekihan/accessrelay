@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zekihan/accessrelay/internal/collector"
@@ -26,6 +29,10 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, req *http.Request) {
+		if !trustedOrigin(req, r.Config.Report.WebsocketURL) {
+			http.Error(w, "origin_forbidden", http.StatusForbidden)
+			return
+		}
 		if !r.Snapshot().Ready {
 			http.Error(w, "renderer_unavailable", http.StatusServiceUnavailable)
 			return
@@ -94,6 +101,74 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 		serveReport(w, req, r.ReportPath())
 	})
 	return mux
+}
+
+// Originless requests remain available to non-browser WebSocket clients. A
+// supplied Origin must match the configured public WebSocket endpoint's
+// scheme, host, and effective port; request Host is deliberately irrelevant.
+func trustedOrigin(req *http.Request, websocketURL string) bool {
+	origins := req.Header.Values("Origin")
+	if len(origins) == 0 {
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	configured, ok := parseOrigin(websocketURL, false)
+	if !ok {
+		return false
+	}
+	switch configured.scheme {
+	case "ws":
+		configured.scheme = "http"
+	case "wss":
+		configured.scheme = "https"
+	}
+	got, ok := parseOrigin(origins[0], true)
+	return ok && got == configured
+}
+
+type origin struct{ scheme, host, port string }
+
+func parseOrigin(raw string, bare bool) (origin, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || (bare && (u.Path != "" || u.RawPath != "")) || strings.ContainsAny(raw, "\r\n\t ,") {
+		return origin{}, false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
+		return origin{}, false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" {
+		return origin{}, false
+	}
+	port := u.Port()
+	if strings.HasSuffix(u.Host, ":") {
+		return origin{}, false
+	}
+	if port == "" {
+		if scheme == "https" || scheme == "wss" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	} else {
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return origin{}, false
+			}
+		}
+		n, e := strconv.Atoi(port)
+		if e != nil || n < 1 || n > 65535 {
+			return origin{}, false
+		}
+		port = strconv.Itoa(n)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return origin{scheme: scheme, host: host, port: port}, true
 }
 func configStale(c *collector.Collector) float64 {
 	d, _ := time.ParseDuration(c.Config.Collection.StaleAfter)

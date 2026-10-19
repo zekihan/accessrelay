@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/config"
 	"github.com/zekihan/accessrelay/internal/source"
 	"github.com/zekihan/accessrelay/internal/store"
@@ -64,11 +65,16 @@ settings=json.loads(sys.argv[5]);client=m.Client(settings,sys.argv[3]);db=m.Stor
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(err, string(output))
 	}
-	s, err := store.Open(c.StateDir)
+	coll, err := collector.New(c, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	s := coll.Store
 	defer s.Close()
+	var bound config.Source
+	if err := s.Get("source_identity", &bound); err != nil || bound != c.Collection.Source {
+		t.Fatalf("legacy source adoption failed: %v", err)
+	}
 	client := source.New(c)
 	defer client.Close()
 	result, err := client.Fetch(context.Background(), start, end)

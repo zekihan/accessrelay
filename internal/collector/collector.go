@@ -4,7 +4,9 @@ package collector
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -62,6 +64,11 @@ type Collector struct {
 	nextPoll, timeReconcile      time.Time
 	reconcileStart, reconcileEnd int64
 	failure                      string
+	renderFailure                string
+	renderRetry                  time.Time
+	renderBackoff                time.Duration
+	reconcileTurn                bool
+	forwardTurn                  bool
 	lastLoop                     time.Time
 	mu                           sync.RWMutex
 	status                       Status
@@ -83,9 +90,15 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 		_ = s.Close()
 		return nil, errors.New("database_format")
 	}
-	if _, err = s.DB.Exec(fmt.Sprintf("PRAGMA max_page_count=%d", c.Limits.MaxDatabaseBytes/pageSize)); err != nil {
+	requestedPageCount := c.Limits.MaxDatabaseBytes / pageSize
+	var effectivePageCount int64
+	if err = s.DB.QueryRow(fmt.Sprintf("PRAGMA max_page_count=%d", requestedPageCount)).Scan(&effectivePageCount); err != nil || effectivePageCount != requestedPageCount {
 		_ = s.Close()
 		return nil, errors.New("database_limit")
+	}
+	if err := bindSourceIdentity(s.DB, c.Collection.Source); err != nil {
+		_ = s.Close()
+		return nil, err
 	}
 	collector := &Collector{Config: c, Store: s, Backend: backend, Consumer: consumer, dirty: true, lastLoop: time.Now()}
 	collector.status.Stale = true
@@ -98,6 +111,52 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 	}
 	return collector, nil
 }
+
+type sourceIdentity struct {
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+	Container string `json:"container"`
+}
+
+// bindSourceIdentity pins an existing database to its configured log source.
+// An unbound inherited database is adopted on first startup; its original
+// source cannot be recovered from the inherited schema.
+func bindSourceIdentity(db *sql.DB, configured config.Source) error {
+	want := sourceIdentity{
+		Cluster: configured.Cluster, Namespace: configured.Namespace, Container: configured.Container,
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return errors.New("database_metadata")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var raw string
+	err = tx.QueryRow(`SELECT value FROM metadata WHERE key='source_identity'`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		encoded, marshalErr := json.Marshal(want)
+		if marshalErr != nil {
+			return errors.New("database_metadata")
+		}
+		if _, err = tx.Exec(`INSERT INTO metadata(key,value) VALUES('source_identity',?)`, string(encoded)); err != nil {
+			return errors.New("database_metadata")
+		}
+	} else if err != nil {
+		return errors.New("database_metadata")
+	} else {
+		var got sourceIdentity
+		if json.Unmarshal([]byte(raw), &got) != nil || got.Cluster == "" || got.Namespace == "" || got.Container == "" {
+			return errors.New("database_metadata")
+		}
+		if got != want {
+			return errors.New("source_mismatch")
+		}
+	}
+	if tx.Commit() != nil {
+		return errors.New("database_metadata")
+	}
+	return nil
+}
+
 func HistoryStart(now time.Time, days int) int64 {
 	u := now.UTC()
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -days+1).UnixNano()
@@ -125,6 +184,12 @@ func (c *Collector) Refresh(now time.Time) error {
 	if err != nil {
 		return errors.New("storage_read")
 	}
+	var pageSize, pageCount, freePages int64
+	if c.Store.DB.QueryRow(`PRAGMA page_size`).Scan(&pageSize) != nil ||
+		c.Store.DB.QueryRow(`PRAGMA page_count`).Scan(&pageCount) != nil ||
+		c.Store.DB.QueryRow(`PRAGMA freelist_count`).Scan(&freePages) != nil || pageSize <= 0 || pageCount < freePages {
+		return errors.New("storage_read")
+	}
 	disk := unix.Statfs_t{}
 	if unix.Statfs(c.Config.StateDir, &disk) != nil {
 		return errors.New("storage_read")
@@ -150,10 +215,13 @@ func (c *Collector) Refresh(now time.Time) error {
 	if c.failure != "" {
 		e := c.failure
 		s.Error = &e
+	} else if c.renderFailure != "" {
+		e := c.renderFailure
+		s.Error = &e
 	}
 	s.SkippedOperationalLastWindow = c.status.SkippedOperationalLastWindow
 	s.DatabaseBytes = size
-	s.StoragePressure = size >= c.Config.Limits.MaxDatabaseBytes || free < c.Config.Limits.ReserveBytes
+	s.StoragePressure = (pageCount-freePages)*pageSize >= c.Config.Limits.MaxDatabaseBytes || free < c.Config.Limits.ReserveBytes
 	if total > 0 {
 		s.StorageUsedPercent = 100 * (1 - float64(free)/float64(total))
 		s.StoragePressure = s.StoragePressure || float64(free)/float64(total) < 0.3
@@ -165,6 +233,9 @@ func (c *Collector) Refresh(now time.Time) error {
 	return nil
 }
 func (c *Collector) checkStorage() error {
+	if err := c.reclaimUnownedGenerations(); err != nil {
+		return err
+	}
 	sizeRuntime, err := TreeSize(c.Config.RuntimeDir)
 	if err != nil {
 		return errors.New("runtime_storage")
@@ -173,11 +244,13 @@ func (c *Collector) checkStorage() error {
 		return errors.New("runtime_limit")
 	}
 
-	size, err := c.Store.Size()
-	if err != nil {
+	var pageSize, pageCount, freePages int64
+	if c.Store.DB.QueryRow(`PRAGMA page_size`).Scan(&pageSize) != nil ||
+		c.Store.DB.QueryRow(`PRAGMA page_count`).Scan(&pageCount) != nil ||
+		c.Store.DB.QueryRow(`PRAGMA freelist_count`).Scan(&freePages) != nil || pageSize <= 0 || pageCount < freePages {
 		return errors.New("storage_read")
 	}
-	if size >= c.Config.Limits.MaxDatabaseBytes {
+	if pageCount-freePages >= c.Config.Limits.MaxDatabaseBytes/pageSize {
 		return errors.New("database_limit")
 	}
 	for _, dir := range []string{c.Config.StateDir, c.Config.RuntimeDir} {
@@ -191,17 +264,53 @@ func (c *Collector) checkStorage() error {
 	}
 	return nil
 }
+
+// reclaimUnownedGenerations removes directories only after the consumer has
+// released them. Renderer.Generation remains set while its child owns a replay
+// and is cleared after that child exits; its parent-death signal covers a
+// collector crash.
+func (c *Collector) reclaimUnownedGenerations() error {
+	dir := filepath.Join(c.Config.RuntimeDir, "generations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return errors.New("runtime_storage")
+	}
+	owned := c.Consumer.Generation()
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == owned || !ownedGenerationName(name) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return errors.New("cleanup_storage")
+		}
+		if name == c.Generation {
+			c.Generation = ""
+			c.exported = 0
+			c.dirty = true
+		}
+	}
+	return nil
+}
+
+func ownedGenerationName(name string) bool {
+	if len(name) != 32 {
+		return false
+	}
+	for _, r := range name {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
 func (c *Collector) rotate(ctx context.Context) error {
 	// Stop before snapshotting: the old consumer must never see a partially rebuilt replay.
-	previous := c.Consumer.Generation()
 	if err := c.Consumer.Stop(ctx); err != nil {
 		return err
 	}
-	if previous != "" && previous == c.Generation {
-		// Published reports are independent snapshots; this known, reaped consumer no longer owns its input.
-		if err := os.RemoveAll(filepath.Join(c.Config.RuntimeDir, "generations", previous)); err != nil {
-			return errors.New("cleanup_storage")
-		}
+	if err := c.reclaimUnownedGenerations(); err != nil {
+		return err
 	}
 	runtimeSize, err := TreeSize(c.Config.RuntimeDir)
 	if err != nil || runtimeSize+c.Config.Limits.MaxReplayBytes > c.Config.Limits.MaxRuntimeBytes {
@@ -267,11 +376,27 @@ func (c *Collector) Cleanup() error {
 	return nil
 }
 func (c *Collector) Export(ctx context.Context) error {
-	if c.Consumer.NeedsReplay() {
+	if c.renderFailure != "" && time.Now().Before(c.renderRetry) {
+		return errors.New(c.renderFailure)
+	}
+	needsReplay := c.Consumer.NeedsReplay()
+	if needsReplay {
 		c.dirty = true
 	}
 	if c.dirty {
-		return c.rotate(ctx)
+		if !needsReplay && c.Consumer.Generation() == "" {
+			return nil
+		}
+		err := c.rotate(ctx)
+		if err != nil {
+			c.recordRenderFailure(err)
+			return err
+		}
+		c.clearRenderFailure()
+		return nil
+	}
+	if c.Consumer.Generation() == "" {
+		return nil
 	}
 	path := filepath.Join(c.Config.RuntimeDir, "generations", c.Generation, "access.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
@@ -295,14 +420,38 @@ func (c *Collector) Export(ctx context.Context) error {
 	}
 	if err != nil {
 		c.dirty = true
-		c.mu.Lock()
-		c.status.ExportFailures++
-		c.mu.Unlock()
+		c.recordRenderFailure(errors.New("export_failed"))
 		_ = c.Consumer.Stop(ctx)
 		return errors.New("export_failed")
 	}
+	c.clearRenderFailure()
 	return nil
 }
+
+func (c *Collector) recordRenderFailure(err error) {
+	c.renderFailure = err.Error()
+	if c.renderBackoff == 0 {
+		c.renderBackoff = time.Second
+	} else {
+		c.renderBackoff = min(time.Minute, c.renderBackoff*2)
+	}
+	c.renderRetry = time.Now().Add(c.renderBackoff)
+	c.mu.Lock()
+	c.status.ExportFailures++
+	c.mu.Unlock()
+}
+
+func (c *Collector) clearRenderFailure() {
+	c.renderFailure = ""
+	c.renderRetry = time.Time{}
+	c.renderBackoff = 0
+}
+
+type postCommitRenderError struct{ err error }
+
+func (e postCommitRenderError) Error() string { return e.err.Error() }
+func (e postCommitRenderError) Unwrap() error { return e.err }
+
 func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -317,12 +466,27 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 	result, err := c.Backend.Fetch(ctx, start, end)
 	if err != nil {
 		var q *source.QueryError
-		if errors.As(err, &q) && q.Split && end-start >= 2*int64(config.Duration(c.Config.Collection.MinimumWindow)) {
-			middle := start + (end-start)/2
-			if err = c.Window(ctx, start, middle, advance); err != nil {
-				return err
+		minimum := int64(config.Duration(c.Config.Collection.MinimumWindow))
+		if errors.As(err, &q) && q.Split && minimum > 0 && end-start > minimum {
+			duration := end - start
+			left := (duration / 2 / minimum) * minimum
+			if left < minimum {
+				left = minimum
 			}
-			return c.Window(ctx, middle, end, advance)
+			if duration >= 2*minimum && duration-left < minimum {
+				left = duration - minimum
+			}
+			middle := start + left
+			firstErr := c.Window(ctx, start, middle, advance)
+			var firstRenderErr postCommitRenderError
+			if firstErr != nil && !errors.As(firstErr, &firstRenderErr) {
+				return firstErr
+			}
+			secondErr := c.Window(ctx, middle, end, advance)
+			if secondErr != nil {
+				return secondErr
+			}
+			return firstErr
 		}
 		return err
 	}
@@ -336,7 +500,7 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 	c.status.CommittedBytes += uint64(result.Bytes)
 	c.mu.Unlock()
 	if err = c.Export(ctx); err != nil {
-		return err
+		return postCommitRenderError{err: err}
 	}
 	return c.Cleanup()
 }
@@ -351,6 +515,7 @@ func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 		c.dirty = true
 		c.reconcileEnd = 0
 		c.timeReconcile = time.Time{}
+		c.forwardTurn = false
 	}
 	cursor := cutoff
 	if err := c.Store.Get("cursor", &cursor); err != nil {
@@ -362,13 +527,27 @@ func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 		}
 		cursor = cutoff
 	}
-	if err := c.Export(ctx); err != nil {
-		return false, err
-	}
+	_ = c.Export(ctx)
 	if err := c.Cleanup(); err != nil {
 		return false, err
 	}
 	size := int64(config.Duration(c.Config.Collection.BackfillWindow))
+	forwardDue := cursor < target && (target-cursor > size || !now.Before(c.nextPoll))
+	if c.reconcileEnd == 0 && !now.Before(c.timeReconcile) && (!c.forwardTurn || !forwardDue) {
+		c.reconcileStart = cutoff
+		c.reconcileEnd = min(cursor, target)
+		c.reconcileTurn = c.reconcileEnd > c.reconcileStart
+		if !c.reconcileTurn {
+			c.reconcileEnd = 0
+			c.timeReconcile = now.Add(config.Duration(c.Config.Collection.ReconciliationInterval))
+		}
+	}
+	if c.reconcileTurn && c.reconcileEnd != 0 {
+		if err := c.runReconcileWindow(ctx, now, size); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if cursor < target && (target-cursor > size || !now.Before(c.nextPoll)) {
 		end := min(cursor+size, target)
 		start := cursor
@@ -376,30 +555,50 @@ func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 			start = max(cutoff, cursor-int64(config.Duration(c.Config.Collection.Overlap)))
 		}
 		if err := c.Window(ctx, start, end, true); err != nil {
-			return false, err
+			var renderErr postCommitRenderError
+			if !errors.As(err, &renderErr) {
+				c.reconcileTurn = c.reconcileEnd != 0
+				c.forwardTurn = false
+				return false, err
+			}
 		}
 		c.nextPoll = now.Add(config.Duration(c.Config.Collection.PollInterval))
 		c.failure = ""
+		c.reconcileTurn = c.reconcileEnd != 0
+		c.forwardTurn = false
 		return target-end > size, nil
 	}
-	if c.reconcileEnd == 0 && !now.Before(c.timeReconcile) && cursor >= target-size {
-		c.reconcileStart = cutoff
-		c.reconcileEnd = min(cursor, target)
-	}
 	if c.reconcileEnd != 0 {
-		end := min(c.reconcileStart+size, c.reconcileEnd)
-		if c.reconcileStart < end {
-			if err := c.Window(ctx, c.reconcileStart, end, false); err != nil {
-				return false, err
-			}
-			c.reconcileStart = end
-			c.failure = ""
-			return true, nil
+		if err := c.runReconcileWindow(ctx, now, size); err != nil {
+			return false, err
 		}
-		c.reconcileEnd = 0
-		c.timeReconcile = now.Add(config.Duration(c.Config.Collection.ReconciliationInterval))
+		return c.reconcileEnd != 0, nil
 	}
 	return false, nil
+}
+
+func (c *Collector) runReconcileWindow(ctx context.Context, now time.Time, size int64) error {
+	end := min(c.reconcileStart+size, c.reconcileEnd)
+	if c.reconcileStart < end {
+		if err := c.Window(ctx, c.reconcileStart, end, false); err != nil {
+			var renderErr postCommitRenderError
+			if !errors.As(err, &renderErr) {
+				c.reconcileTurn = false
+				c.forwardTurn = false
+				return err
+			}
+		}
+		c.reconcileStart = end
+		c.reconcileTurn = false
+		c.failure = ""
+	}
+	if c.reconcileStart >= c.reconcileEnd {
+		c.reconcileEnd = 0
+		c.reconcileTurn = false
+		c.forwardTurn = true
+		c.timeReconcile = now.Add(config.Duration(c.Config.Collection.ReconciliationInterval))
+	}
+	return nil
 }
 func (c *Collector) Run(ctx context.Context) error {
 	backoff := time.Second
@@ -442,8 +641,12 @@ func (c *Collector) Run(ctx context.Context) error {
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = c.Consumer.Stop(shutdown)
-	return c.Store.Close()
+	stopErr := c.Consumer.Stop(shutdown)
+	closeErr := c.Store.Close()
+	if stopErr != nil {
+		return errors.New("renderer_shutdown")
+	}
+	return closeErr
 }
 
 func TreeSize(root string) (int64, error) {

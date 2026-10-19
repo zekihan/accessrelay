@@ -79,7 +79,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="accessrelay-fixture-") as temporary:
             root = Path(temporary)
             config = json.loads((ROOT / "examples/config.json").read_text())
-            config["report"].update(historyDays=1, jobs=2)
+            config["report"].update(historyDays=1, jobs=2, configOverrides={"http-method": "true", "http-protocol": "true", "anonymize-ip": "no"})
             config["collection"].update(pollInterval="1s", ingestionDelay="1s", backfillWindow="1h", reconciliationInterval="1s", staleAfter="1s")
             config["limits"]["diagnosticBytes"] = 128
             for kind in ["app", "legacy"]:
@@ -107,9 +107,12 @@ class RuntimeTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{ports[kind]}{path}", timeout=3) as response:
                     return response.read().decode()
 
-            def websocket(kind):
+            def websocket(kind, origin=None):
                 with socket.create_connection(("127.0.0.1", ports[kind]), timeout=3) as connection:
-                    connection.sendall(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+                    headers = b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+                    if origin is not None:
+                        headers += b"Origin: " + origin.encode("ascii") + b"\r\n"
+                    connection.sendall(headers + b"\r\n")
                     return b"101 Switching Protocols" in connection.recv(4096)
 
             def replay_count(kind):
@@ -141,6 +144,8 @@ class RuntimeTests(unittest.TestCase):
                     wait(lambda: websocket(kind))
                     self.assertEqual(report(request(kind))["general"]["valid_requests"], 0)
                 self.assertIn("accessrelay-status", request("app"))
+                self.assertTrue(websocket("app", "http://localhost:8080"))
+                self.assertFalse(websocket("app", "https://untrusted.example"))
                 now = datetime.now(timezone.utc) - timedelta(seconds=15)
 
                 def row(path="/hello?q=1", status="200", size="42", agent="Miniflux Client Library", pod="a"):
@@ -202,8 +207,8 @@ class RuntimeTests(unittest.TestCase):
                     with backend.mutex:
                         backend.rows += [row(f"/bad/{batch}/{i}", "BAD", "bad") for i in range(20)]
                     wait(lambda: replay_count("app") == 5 + 20 * (batch + 1))
-                    invalid = root / "app/state/logs/invalid-requests.log"
-                    wait(lambda: invalid.exists() and invalid.stat().st_size <= 128)
+                    invalid = root / "app/state/logs/invalid-requests.log.snapshot"
+                    wait(lambda: invalid.exists() and 0 < invalid.stat().st_size <= 128)
                 wait(lambda: len(list((root / "app/runtime/generations").iterdir())) == 1)
                 self.assertLessEqual(len(list((root / "app/state/www").iterdir())), 1)
                 self.assertFalse(list((root / "app/runtime").glob("window-*")))
@@ -212,6 +217,11 @@ class RuntimeTests(unittest.TestCase):
                 docker("stop", "-t", "30", names["app"])
                 self.assertLess(time.monotonic() - before, 25)
                 self.assertEqual(docker("inspect", "--format", "{{.State.ExitCode}}", names["app"]).stdout.strip(), "0")
+                for diagnostic in ["unknowns.txt", "invalid-requests.log"]:
+                    path = root / "app/state/logs" / diagnostic
+                    self.assertTrue(path.is_file(), "clean stop must restore a regular diagnostic file")
+                    self.assertEqual(path.read_bytes(), path.with_name(diagnostic + ".snapshot").read_bytes())
+                    self.assertLessEqual(path.stat().st_size, 128)
             except BaseException:
                 for name in started:
                     logs = docker("logs", "--tail", "10", name, check=False)

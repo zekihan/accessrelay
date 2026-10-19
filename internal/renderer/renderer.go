@@ -28,19 +28,22 @@ type Snapshot struct {
 	Error    string `json:"error,omitempty"`
 }
 type Renderer struct {
-	Config     config.Config
-	mu         sync.Mutex
-	cmd        *exec.Cmd
-	done       chan struct{}
-	generation string
-	output     string
-	retry      time.Time
-	backoff    time.Duration
-	status     Snapshot
+	Config      config.Config
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	done        chan struct{}
+	generation  string
+	output      string
+	retry       time.Time
+	backoff     time.Duration
+	status      Snapshot
+	startedAt   time.Time
+	initTimeout time.Duration
+	diagnostics []*diagnosticCapture
 }
 
 func New(c config.Config) (*Renderer, error) {
-	r := &Renderer{Config: c, backoff: time.Second}
+	r := &Renderer{Config: c, backoff: time.Second, initTimeout: 5 * time.Minute}
 	for _, dir := range []string{filepath.Join(c.StateDir, "www"), filepath.Join(c.StateDir, "logs"), c.RuntimeDir} {
 		if os.MkdirAll(dir, 0700) != nil {
 			return nil, errors.New("renderer_storage")
@@ -65,11 +68,55 @@ func (r *Renderer) NeedsReplay() bool {
 	return r.cmd == nil && !time.Now().Before(r.retry)
 }
 func (r *Renderer) Generation() string { r.mu.Lock(); defer r.mu.Unlock(); return r.generation }
+func (r *Renderer) diagnosticPaths() []string {
+	return []string{filepath.Join(r.Config.StateDir, "logs", "unknowns.txt"), filepath.Join(r.Config.StateDir, "logs", "invalid-requests.log")}
+}
+
+func (r *Renderer) prepareDiagnosticPath(path string) error {
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode().IsRegular() {
+		// Preserve a bounded copy of legacy diagnostics before replacing the
+		// GoAccess destination with its drainable FIFO.
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return openErr
+		}
+		data, readErr := io.ReadAll(io.LimitReader(f, r.Config.Limits.DiagnosticBytes))
+		closeErr := f.Close()
+		if readErr != nil || closeErr != nil {
+			return errors.New("diagnostic_read")
+		}
+		if err := atomicFile(path+".snapshot", data); err != nil {
+			return err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return ensureDiagnosticFIFO(path)
+}
 func (r *Renderer) Start(ctx context.Context, generation string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.stopLocked(ctx); err != nil {
 		return err
+	}
+	return r.startLocked(ctx, generation)
+}
+
+func (r *Renderer) startLocked(ctx context.Context, generation string) error {
+	childStarted := false
+	defer func() {
+		if !childStarted {
+			if r.stopDiagnosticsLocked() != nil {
+				r.status.Error = "renderer_diagnostic_storage"
+			}
+		}
+	}()
+	for _, path := range r.diagnosticPaths() {
+		if err := r.prepareDiagnosticPath(path); err != nil {
+			r.failedLocked("renderer_diagnostic_storage")
+			return errors.New("renderer_diagnostic_storage")
+		}
 	}
 	dir := filepath.Join(r.Config.RuntimeDir, "generations", generation)
 	r.output = filepath.Join(dir, "index.html")
@@ -91,7 +138,7 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 		lines := strings.Split(text, "\n")
 		for i, line := range lines {
 			if strings.HasPrefix(line, key+" ") {
-				lines[i] = key + " " + r.Config.Report.ConfigOverrides[key]
+				lines[i] = key + " " + normalizedOverride(key, r.Config.Report.ConfigOverrides[key])
 			}
 		}
 		text = strings.Join(lines, "\n")
@@ -100,6 +147,14 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 		return errors.New("renderer_storage")
 	}
 	args := []string{"--no-global-config", "--config-file=" + conf, "--jobs=" + strconv.Itoa(r.Config.Report.Jobs), "--chunk-size=" + strconv.Itoa(r.Config.Report.ChunkSize), "--db-path=" + filepath.Join(dir, "db"), "--pid-file=" + filepath.Join(dir, "child.pid"), "--unknowns-log=" + filepath.Join(r.Config.StateDir, "logs/unknowns.txt"), "--invalid-requests=" + filepath.Join(r.Config.StateDir, "logs/invalid-requests.log"), "--output=" + r.output, filepath.Join(dir, "access.log")}
+	for _, path := range r.diagnosticPaths() {
+		capture, err := startDiagnosticCapture(path, r.Config.Limits.DiagnosticBytes)
+		if err != nil {
+			r.failedLocked("renderer_diagnostic_storage")
+			return errors.New("renderer_diagnostic_storage")
+		}
+		r.diagnostics = append(r.diagnostics, capture)
+	}
 	cmd := exec.Command(r.Config.GoAccessBinary, args...)
 	configureChild(cmd)
 	cmd.Stdout = io.Discard
@@ -109,6 +164,7 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 		r.failedLocked("renderer_start")
 		return errors.New("renderer_start")
 	}
+	childStarted = true
 	r.cmd = cmd
 	r.generation = generation
 	r.done = make(chan struct{})
@@ -121,12 +177,33 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 	r.status.Running = true
 	r.status.Ready = false
 	r.status.Error = ""
+	r.startedAt = time.Now()
 	// Ownership transfers only after the old child has been reaped and the new child has started.
 	if atomicFile(filepath.Join(r.Config.RuntimeDir, "consumer"), []byte(generation+"\n")) != nil {
 		_ = r.stopLocked(ctx)
 		return errors.New("renderer_handoff")
 	}
 	return nil
+}
+
+func normalizedOverride(key, value string) string {
+	switch key {
+	case "http-method", "http-protocol":
+		if value == "true" {
+			return "yes"
+		}
+		if value == "false" {
+			return "no"
+		}
+	default:
+		if value == "yes" {
+			return "true"
+		}
+		if value == "no" {
+			return "false"
+		}
+	}
+	return value
 }
 func (r *Renderer) failedLocked(reason string) {
 	r.cmd = nil
@@ -135,11 +212,15 @@ func (r *Renderer) failedLocked(reason string) {
 	r.status.Ready = false
 	r.status.Error = reason
 	r.status.Restarts++
+	r.startedAt = time.Time{}
 	r.retry = time.Now().Add(r.backoff)
 	r.backoff = min(60*time.Second, r.backoff*2)
 }
 func (r *Renderer) stopLocked(ctx context.Context) error {
 	if r.cmd == nil {
+		if r.stopDiagnosticsLocked() != nil {
+			return errors.New("renderer_diagnostic_storage")
+		}
 		return nil
 	}
 	_ = r.cmd.Process.Signal(os.Interrupt)
@@ -161,6 +242,7 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 			<-r.done
 		}
 	}
+	diagnosticErr := r.stopDiagnosticsLocked()
 	// GoAccess writes its last HTML snapshot on graceful exit.
 	if data, err := completeFile(r.output, r.Config.Limits.MaxReportBytes); err == nil {
 		_ = atomicFile(r.ReportPath(), annotate(data))
@@ -169,6 +251,64 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 	r.generation = ""
 	r.status.Running = false
 	r.status.Ready = false
+	if diagnosticErr != nil {
+		r.status.Error = "renderer_diagnostic_storage"
+		return errors.New("renderer_diagnostic_storage")
+	}
+	return nil
+}
+
+func (r *Renderer) stopDiagnosticsLocked() error {
+	var failed bool
+	for _, capture := range r.diagnostics {
+		capture.close()
+		if capture.writeError.Load() {
+			failed = true
+		}
+	}
+	r.diagnostics = nil
+	for _, path := range r.diagnosticPaths() {
+		info, err := os.Lstat(path)
+		if err != nil && !os.IsNotExist(err) {
+			failed = true
+			continue
+		}
+		if info != nil && info.Mode()&os.ModeNamedPipe == 0 {
+			if !info.Mode().IsRegular() {
+				failed = true
+			}
+			continue
+		}
+		var data []byte
+		var snapshot *os.File
+		snapshot, err = os.Open(path + ".snapshot")
+		if os.IsNotExist(err) {
+			data, err = nil, nil
+		} else if err == nil {
+			data, err = io.ReadAll(io.LimitReader(snapshot, r.Config.Limits.DiagnosticBytes))
+			if closeErr := snapshot.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			failed = true
+			// Still replace the FIFO with an empty regular file so no stale
+			// child-facing pipe remains after shutdown.
+			data = nil
+		}
+		if atomicFile(path, data) != nil {
+			failed = true
+			// If replacement failed, remove the pipe as a last resort. The
+			// caller still receives an error because diagnostics were not restored.
+			if info != nil && info.Mode()&os.ModeNamedPipe != 0 {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	if failed {
+		r.status.Error = "renderer_diagnostic_storage"
+		return errors.New("renderer_diagnostic_storage")
+	}
 	return nil
 }
 func (r *Renderer) Stop(ctx context.Context) error {
@@ -191,12 +331,9 @@ func (r *Renderer) Run(ctx context.Context) {
 func (r *Renderer) tick() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, name := range []string{"unknowns.txt", "invalid-requests.log"} {
-		path := filepath.Join(r.Config.StateDir, "logs", name)
-		if info, err := os.Stat(path); err == nil && info.Size() > r.Config.Limits.DiagnosticBytes {
-			if os.Truncate(path, 0) != nil {
-				r.status.Error = "diagnostic_storage"
-			}
+	for _, capture := range r.diagnostics {
+		if capture.writeError.Load() {
+			r.status.Error = "renderer_diagnostic_storage"
 		}
 	}
 	if r.cmd == nil {
@@ -204,11 +341,20 @@ func (r *Renderer) tick() {
 	}
 	select {
 	case <-r.done:
+		diagnosticErr := r.stopDiagnosticsLocked()
 		r.failedLocked("renderer_exit")
+		if diagnosticErr != nil {
+			r.status.Error = "renderer_diagnostic_storage"
+		}
 		return
 	default:
 	}
 	if !r.status.Ready {
+		if time.Since(r.startedAt) >= r.initTimeout {
+			_ = r.stopLocked(context.Background())
+			r.failedLocked("renderer_unready")
+			return
+		}
 		data, err := completeFile(r.output, r.Config.Limits.MaxReportBytes)
 		if err != nil {
 			return
