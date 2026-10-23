@@ -145,6 +145,8 @@ type Gap struct {
 	End   string `json:"end"`
 }
 
+const insertInitialChanges = `INSERT INTO changes(event_id,copies) SELECT e.id,e.occurrences FROM window.records r CROSS JOIN events e WHERE e.digest=r.digest AND NOT EXISTS(SELECT 1 FROM changes c WHERE c.event_id=e.id)`
+
 func (s *Store) Gap(start, end string, cursor int64) error {
 	var gaps []Gap
 	if err := s.Get("gaps", &gaps); err != nil {
@@ -183,7 +185,7 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 		`INSERT INTO changes(event_id,copies) SELECT e.id,r.copies-e.occurrences FROM window.records r JOIN events e ON e.digest=r.digest WHERE r.copies>e.occurrences`,
 		`UPDATE events SET occurrences=(SELECT copies FROM window.records r WHERE r.digest=events.digest) WHERE digest IN(SELECT digest FROM window.records) AND occurrences<(SELECT copies FROM window.records r WHERE r.digest=events.digest)`,
 		`INSERT INTO events(digest,time_ns,source_id,message,occurrences) SELECT r.digest,r.time_ns,s.id,r.message,r.copies FROM window.records r JOIN sources s ON s.identity=r.source WHERE NOT EXISTS(SELECT 1 FROM events e WHERE e.digest=r.digest)`,
-		`INSERT INTO changes(event_id,copies) SELECT e.id,e.occurrences FROM window.records r JOIN events e ON e.digest=r.digest WHERE NOT EXISTS(SELECT 1 FROM changes c WHERE c.event_id=e.id)`,
+		insertInitialChanges,
 	}
 	for _, q := range statements {
 		if _, e = tx.ExecContext(ctx, q); e != nil {
