@@ -1,0 +1,39 @@
+name: Migration image
+on:
+  push:
+    branches: [codex/dual-stack-migration-sqlite]
+permissions:
+  contents: read
+concurrency:
+  group: migration-image-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    uses: ./.github/workflows/pr.yaml
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish migration-only AMD64 image
+        env:
+          IMAGE: ghcr.io/zekihan/accessrelay
+          REVISION: ${{ github.sha }}
+        run: |
+          tag="0.1.1-migration-sqlite-${REVISION}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --tag "${IMAGE}:${tag}" \
+            --label "org.opencontainers.image.revision=${REVISION}" \
+            --build-arg "VERSION=${tag}" \
+            .
