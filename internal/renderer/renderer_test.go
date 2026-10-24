@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -384,7 +385,11 @@ func TestUnreadyChildTimesOutAndIsReaped(t *testing.T) {
 					if snapshot.Running || snapshot.Ready || r.Generation() != "" {
 						t.Fatalf("unexpected timeout status: %+v", snapshot)
 					}
-					if child.ProcessState == nil || !child.ProcessState.Exited() {
+					if child.ProcessState == nil {
+						t.Fatal("unready renderer was not reaped")
+					}
+					status, ok := child.ProcessState.Sys().(syscall.WaitStatus)
+					if !child.ProcessState.Exited() && (!ok || !status.Signaled()) {
 						t.Fatal("unready renderer was not reaped")
 					}
 					return
