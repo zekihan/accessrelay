@@ -2,7 +2,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "accessrelay.fullname" . }}
+  name: {{ include "accessrelay.fullname" . | quote }}
 spec:
   podSelector:
     matchLabels:

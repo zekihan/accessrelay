@@ -21,6 +21,13 @@ named `connection.json`. Supply its contents through your secret-management
 workflow. The file contains a backend `url` and an optional string-to-string
 `headers` object. Use headers for tenant routing and authentication. Do not put
 credentials in values, URLs, container arguments, or committed files.
+Backend URLs must use HTTPS, including when no headers are configured. For a
+loopback backend or a service mesh that supplies authenticated encryption, an
+operator may explicitly set `"allowInsecureHTTP": true` in `connection.json`.
+This acknowledges that accessrelay itself sends both headers and logs in
+cleartext on that hop; verify the compensating boundary before opting in. TLS
+verification and redirects remain unchanged. Existing HTTP connections must
+migrate to HTTPS or receive this explicit operator acknowledgement before upgrade.
 
 ```sh
 helm upgrade --install accessrelay oci://ghcr.io/zekihan/charts/accessrelay \
@@ -34,7 +41,14 @@ Images: `docker.io/zekihan/accessrelay:0.1.1` and
 The [chart reference](charts/accessrelay/README.md) describes all configuration.
 Set the source cluster and the network policy's backend and ingress peers before
 installing. Default policies allow DNS and deny other inbound/outbound traffic.
-TLS and authentication belong at your ingress. The service has no built-in
+The shipped installation example disables Ingress and denies application ingress;
+view reports through the documented local port-forward. Reports retain client IPs
+and query strings. Before enabling a routable Ingress, configure controller-specific
+authentication for **every** route above, including `/ws`, `/status.json`,
+`/metrics`, `/health`, and `/ready`, and verify unauthenticated requests are denied.
+TLS encrypts transport but does not authenticate viewers. Keep Ingress disabled
+until that boundary is verified; this repository does not configure a live
+controller or authentication provider. The service has no built-in
 account system and needs no Kubernetes API permissions.
 Browser WebSocket requests must have an Origin matching the public host, scheme,
 and port in `report.websocketURL` (with `ws`/`wss` mapped to `http`/`https`).
@@ -61,6 +75,17 @@ Malformed records, missing source identity, embedded line breaks, oversized
 responses, truncated bodies and redirects fail the complete window. Timeout and
 size failures split windows down to `minimumWindow`. A failed half prevents
 advancement over that half; completed earlier halves remain committed.
+Each root window, including all split children and discarded responses, shares
+`maxWindowQueries` (64), `maxWindowTotalBytes` (512MiB), `maxWindowRecords`
+(1,000,000 parsed/staged input records, including duplicates and operational
+records), and `windowTimeout` (2m). Response bytes are charged when read, including
+buffer read-ahead, with at most one byte of overshoot to detect an exact-bound EOF.
+The timeout covers requests and context-aware staging/commits. Exhaustion returns
+opaque `window_budget`, stops splitting, and uses the normal collection backoff.
+Completed earlier children remain committed; retry starts from durable progress.
+Per-response `maxWindowBytes`, line and query timeout limits still apply. Large
+existing split trees may now stop early; tune these explicit aggregate bounds
+alongside runtime capacity after measuring representative trusted workloads.
 Unpaired Unicode surrogate escapes are rejected before decoding so different
 input records cannot collapse into the same event identity.
 

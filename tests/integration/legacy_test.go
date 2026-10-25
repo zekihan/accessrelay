@@ -51,7 +51,7 @@ func TestLegacyDatabaseDigestAndRollbackCompatibility(t *testing.T) {
 	c.Collection.Source.Cluster = "fixture"
 	_ = os.Mkdir(c.StateDir, 0700)
 	_ = os.Mkdir(c.RuntimeDir, 0700)
-	raw, _ := json.Marshal(map[string]string{"url": server.URL})
+	raw, _ := json.Marshal(map[string]any{"url": server.URL, "allowInsecureHTTP": true})
 	_ = os.WriteFile(c.ConnectionFile, raw, 0600)
 	script := `import sys, importlib.util, json
 s=importlib.util.spec_from_file_location('legacy',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)

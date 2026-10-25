@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "accessrelay.fullname" . }}
+  name: {{ include "accessrelay.fullname" . | quote }}
   labels:
     {{- include "accessrelay.labels" . | nindent 4 }}
   {{- with .Values.service.annotations }}
@@ -9,7 +9,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ .Values.service.type | quote }}
   selector:
     {{- include "accessrelay.selector" . | nindent 4 }}
   ports:
@@ -21,10 +21,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Values.authService.name }}
+  name: {{ .Values.authService.name | quote }}
 spec:
   type: ExternalName
-  externalName: {{ required "authService.externalName is required" .Values.authService.externalName }}
+  externalName: {{ required "authService.externalName is required" .Values.authService.externalName | quote }}
   ports:
     - name: http
       port: {{ .Values.authService.port }}

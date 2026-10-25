@@ -165,7 +165,7 @@ func (c *Collector) Snapshot() Status { c.mu.RLock(); defer c.mu.RUnlock(); retu
 func (c *Collector) Healthy(now time.Time) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return now.Sub(c.lastLoop) < config.Duration(c.Config.Collection.QueryTimeout)+90*time.Second
+	return now.Sub(c.lastLoop) < config.Duration(c.Config.Collection.WindowTimeout)+90*time.Second
 }
 func (c *Collector) Refresh(now time.Time) error {
 	var last *float64
@@ -453,7 +453,17 @@ func (e postCommitRenderError) Error() string { return e.err.Error() }
 func (e postCommitRenderError) Unwrap() error { return e.err }
 
 func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) error {
-	if err := ctx.Err(); err != nil {
+	ctx, cancel := source.WithWindowBudget(ctx, c.Config.Collection)
+	defer cancel()
+	err := c.window(ctx, start, end, advance)
+	if budgetErr := source.WindowBudgetFrom(ctx).Check(ctx); budgetErr != nil {
+		return budgetErr
+	}
+	return err
+}
+
+func (c *Collector) window(ctx context.Context, start, end int64, advance bool) error {
+	if err := source.WindowBudgetFrom(ctx).BeginQuery(ctx); err != nil {
 		return err
 	}
 	if err := c.checkStorage(); err != nil {
@@ -464,6 +474,12 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 	c.lastLoop = time.Now()
 	c.mu.Unlock()
 	result, err := c.Backend.Fetch(ctx, start, end)
+	if budgetErr := source.WindowBudgetFrom(ctx).Check(ctx); budgetErr != nil {
+		if err == nil {
+			_ = os.Remove(result.Path)
+		}
+		return budgetErr
+	}
 	if err != nil {
 		var q *source.QueryError
 		minimum := int64(config.Duration(c.Config.Collection.MinimumWindow))
@@ -477,12 +493,12 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 				left = duration - minimum
 			}
 			middle := start + left
-			firstErr := c.Window(ctx, start, middle, advance)
+			firstErr := c.window(ctx, start, middle, advance)
 			var firstRenderErr postCommitRenderError
 			if firstErr != nil && !errors.As(firstErr, &firstRenderErr) {
 				return firstErr
 			}
-			secondErr := c.Window(ctx, middle, end, advance)
+			secondErr := c.window(ctx, middle, end, advance)
 			if secondErr != nil {
 				return secondErr
 			}

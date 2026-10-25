@@ -42,6 +42,24 @@ func New(c config.Config) *Client {
 }
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
 func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, err error) {
+	budget := WindowBudgetFrom(ctx)
+	if budget == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = WithWindowBudget(ctx, c.Config.Collection)
+		defer cancel()
+		budget = WindowBudgetFrom(ctx)
+		if err := budget.BeginQuery(ctx); err != nil {
+			return result, err
+		}
+	}
+	defer func() {
+		if budget.Check(ctx) != nil {
+			if err == nil && result.Path != "" {
+				_ = os.Remove(result.Path)
+			}
+			err = queryError("window_budget", false)
+		}
+	}()
 	if start >= end {
 		return result, queryError("invalid_window", false)
 	}
@@ -50,8 +68,9 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, queryError("connection_configuration", false)
 	}
 	var connection struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
+		URL               string            `json:"url"`
+		Headers           map[string]string `json:"headers"`
+		AllowInsecureHTTP bool              `json:"allowInsecureHTTP"`
 	}
 	if json.Unmarshal(raw, &connection) != nil {
 		return result, queryError("connection_configuration", false)
@@ -59,6 +78,9 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 	u, e := url.Parse(connection.URL)
 	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return result, queryError("connection_configuration", false)
+	}
+	if u.Scheme == "http" && !connection.AllowInsecureHTTP {
+		return result, queryError("connection_insecure_transport", false)
 	}
 	query := "options(allow_partial_response=false)"
 	for _, field := range [][2]string{{"cluster", c.Config.Collection.Source.Cluster}, {"kubernetes.namespace_name", c.Config.Collection.Source.Namespace}, {"kubernetes.container_name", c.Config.Collection.Source.Container}} {
@@ -127,10 +149,13 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, errors.New("stage_storage")
 	}
 	defer func() { _ = statement.Close() }()
-	reader := bufio.NewReaderSize(response.Body, c.Config.Collection.MaxLineBytes+1)
+	reader := bufio.NewReaderSize(&budgetReader{body: response.Body, budget: budget, ctx: ctx}, c.Config.Collection.MaxLineBytes+1)
 	for {
 		line, readErr := reader.ReadSlice('\n')
 		result.Bytes += int64(len(line))
+		if e := budget.Check(ctx); e != nil {
+			return result, e
+		}
 		if len(line) > c.Config.Collection.MaxLineBytes || result.Bytes > c.Config.Collection.MaxWindowBytes {
 			return result, queryError("window_limit", true)
 		}
@@ -139,6 +164,9 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 				break
 			}
 			return result, queryError("incomplete_response", readErr != bufio.ErrBufferFull)
+		}
+		if e := budget.StageRecord(ctx); e != nil {
+			return result, e
 		}
 		record, operational, e := Decode(line, start, end)
 		if e != nil {

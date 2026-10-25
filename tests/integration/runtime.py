@@ -88,7 +88,7 @@ class RuntimeTests(unittest.TestCase):
                     path.mkdir(parents=True, mode=0o777)
                     path.chmod(0o777)
                 (root / kind / "config/accessrelay.json").write_text(json.dumps(config))
-                (root / kind / "connection/connection.json").write_text(json.dumps({"url": f"http://host.docker.internal:{backend.server_port}", "headers": {"Authorization": "fixture-a"}}))
+                (root / kind / "connection/connection.json").write_text(json.dumps({"url": f"http://host.docker.internal:{backend.server_port}", "allowInsecureHTTP": True, "headers": {"Authorization": "fixture-a"}}))
             legacy = root / "legacy/config"
             for name in ["collector.py", "goaccess-start.sh", "nginx.conf"]:
                 (legacy / name).write_text((ROOT / "tests/legacy" / name).read_text())
@@ -179,7 +179,7 @@ class RuntimeTests(unittest.TestCase):
                 # Replace the projected symlink, as Kubernetes does when refreshing a Secret.
                 connection = root / "app/connection"
                 (connection / "next").mkdir()
-                (connection / "next/connection.json").write_text(json.dumps({"url": f"http://host.docker.internal:{backend.server_port}", "headers": {"Authorization": "fixture-b"}}))
+                (connection / "next/connection.json").write_text(json.dumps({"url": f"http://host.docker.internal:{backend.server_port}", "allowInsecureHTTP": True, "headers": {"Authorization": "fixture-b"}}))
                 (connection / "connection.json").unlink()
                 (connection / "connection.json").symlink_to("next/connection.json")
                 wait(lambda: "fixture-b" in backend.tokens)

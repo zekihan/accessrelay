@@ -42,3 +42,22 @@ func TestGoAccessBooleanOverrideSpellingsRemainAccepted(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowBudgetValidation(t *testing.T) {
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.Collection.MaxWindowQueries = 0 },
+		func(c *Config) { c.Collection.MaxWindowQueries = 1025 },
+		func(c *Config) { c.Collection.MaxWindowTotalBytes = 0 },
+		func(c *Config) { c.Collection.MaxWindowTotalBytes = 4294967297 },
+		func(c *Config) { c.Collection.MaxWindowRecords = 0 },
+		func(c *Config) { c.Collection.MaxWindowRecords = 10000001 },
+		func(c *Config) { c.Collection.WindowTimeout = "0s" },
+	} {
+		c := Default()
+		c.Collection.Source.Cluster = "fixture"
+		mutate(&c)
+		if c.Validate() == nil {
+			t.Fatal("invalid aggregate window budget accepted")
+		}
+	}
+}

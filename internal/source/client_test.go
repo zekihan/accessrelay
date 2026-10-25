@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +98,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	rotate := func(token string) {
 		dir := filepath.Join(root, token)
 		_ = os.Mkdir(dir, 0700)
-		data, _ := json.Marshal(map[string]any{"url": backend.URL, "headers": map[string]string{"Authorization": token}})
+		data, _ := json.Marshal(map[string]any{"url": backend.URL, "allowInsecureHTTP": true, "headers": map[string]string{"Authorization": token}})
 		_ = os.WriteFile(filepath.Join(dir, "connection.json"), data, 0600)
 		_ = os.Symlink(dir, filepath.Join(root, "..data-next"))
 		_ = os.Rename(filepath.Join(root, "..data-next"), filepath.Join(root, "..data"))
@@ -201,3 +202,50 @@ func TestDecodeRejectsUnpairedSurrogateEscapes(t *testing.T) {
 		t.Fatal(op, err)
 	}
 }
+
+func TestBackendTransportRequiresExplicitHTTPAcknowledgement(t *testing.T) {
+	for _, tc := range []struct {
+		name, url, headers string
+		ack                string
+		allowed            bool
+	}{
+		{"http-authorization", "http://logs.example.invalid", `{"Authorization":"synthetic"}`, "", false},
+		{"http-tenant", "http://logs.example.invalid", `{"X-Scope-OrgID":"synthetic"}`, "", false},
+		{"http-no-headers", "http://127.0.0.1:9428", `{}`, "", false},
+		{"https", "https://logs.example.invalid", `{"Authorization":"synthetic"}`, "", true},
+		{"loopback-acknowledged", "http://127.0.0.1:9428", `{"Authorization":"synthetic"}`, `,"allowInsecureHTTP":true`, true},
+		{"mesh-acknowledged", "http://logs.mesh.invalid:9428", `{"X-Scope-OrgID":"synthetic"}`, `,"allowInsecureHTTP":true`, true},
+		{"http-false", "http://127.0.0.1:9428", `{}`, `,"allowInsecureHTTP":false`, false},
+		{"http-string", "http://127.0.0.1:9428", `{}`, `,"allowInsecureHTTP":"true"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := config.Default()
+			c.RuntimeDir = t.TempDir()
+			c.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
+			if err := os.WriteFile(c.ConnectionFile, []byte(`{"url":"`+tc.url+`","headers":`+tc.headers+tc.ack+`}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			client := &Client{Config: c, HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				called = true
+				if r.URL.Scheme+"://"+r.URL.Host != tc.url {
+					t.Fatal("unexpected backend URL")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}}
+			result, err := client.Fetch(context.Background(), 1, 2)
+			if called != tc.allowed || (err == nil) != tc.allowed {
+				t.Fatalf("allowed=%v called=%v err=%v", tc.allowed, called, err)
+			}
+			if err == nil {
+				_ = os.Remove(result.Path)
+			} else if strings.Contains(err.Error(), "synthetic") || strings.Contains(err.Error(), "http") && err.Error() != "connection_insecure_transport" {
+				t.Fatal("non-opaque transport error", err)
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

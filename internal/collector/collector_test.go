@@ -85,7 +85,7 @@ func newFixture(t *testing.T) *fixture {
 	c.Collection.Source.Cluster = "fixture"
 	c.Collection.ReconciliationInterval = "1s"
 	c.Report.HistoryDays = 1
-	raw, _ := json.Marshal(map[string]string{"url": f.backend.URL})
+	raw, _ := json.Marshal(map[string]any{"url": f.backend.URL, "allowInsecureHTTP": true})
 	_ = os.WriteFile(c.ConnectionFile, raw, 0600)
 	f.client = source.New(c)
 	f.config = c
@@ -477,6 +477,7 @@ func (s minimumSplitter) Fetch(ctx context.Context, start, end int64) (source.Re
 
 func TestTimeoutSplitReachesConfiguredMinimumWindow(t *testing.T) {
 	f := newFixture(t)
+	f.c.Config.Collection.MaxWindowQueries = 1024
 	f.c.Backend = minimumSplitter{Backend: f.client}
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 	end := start + int64(300*time.Second)
@@ -708,4 +709,133 @@ func TestMalformedSourceIdentityRejectedAndLockReleased(t *testing.T) {
 		t.Fatal("writer lock was not released:", err)
 	}
 	_ = reopened.Close()
+}
+
+type backendFunc func(context.Context, int64, int64) (source.Result, error)
+
+func (f backendFunc) Fetch(ctx context.Context, start, end int64) (source.Result, error) {
+	return f(ctx, start, end)
+}
+
+func TestRootWindowQueryBudgetStopsMaliciousSplitTree(t *testing.T) {
+	f := newFixture(t)
+	f.c.Config.Collection.MaxWindowQueries = 7
+	calls := 0
+	f.c.Backend = backendFunc(func(context.Context, int64, int64) (source.Result, error) {
+		calls++
+		return source.Result{}, &source.QueryError{Reason: "window_limit", Split: true}
+	})
+	start := f.now.UnixNano()
+	err := f.c.Window(context.Background(), start, start+int64(time.Hour), true)
+	if err == nil || err.Error() != "window_budget" || calls != 7 || f.c.Snapshot().Queries != 7 {
+		t.Fatalf("split tree escaped shared query budget: calls=%d err=%v", calls, err)
+	}
+	var cursor int64
+	if err := f.c.Store.Get("cursor", &cursor); err != nil || cursor != 0 {
+		t.Fatalf("failed tree advanced cursor: %d %v", cursor, err)
+	}
+}
+
+func TestRootWindowBudgetsIncludeDiscardedStagesAndBothChildren(t *testing.T) {
+	for _, limit := range []string{"bytes", "records", "ordinary"} {
+		t.Run(limit, func(t *testing.T) {
+			f := newFixture(t)
+			start := f.now.UnixNano()
+			row := f.row(source.Timestamp(start), "fixture")
+			raw, _ := json.Marshal(row)
+			lineBytes := len(raw) + 1
+			parentRecords := 1024/lineBytes + 1
+			parentBytes := int64(parentRecords * lineBytes)
+			var calls int
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_ = r.ParseForm()
+				a, _ := source.ParseTimestamp(r.Form.Get("start"))
+				b, _ := source.ParseTimestamp(r.Form.Get("end"))
+				n := 1
+				if b-a > int64(2*time.Second) {
+					n = parentRecords // oversize root is discarded before splitting
+				}
+				for range n {
+					x := f.row(source.Timestamp(a), "fixture")
+					_ = json.NewEncoder(w).Encode(x)
+				}
+			}))
+			defer backend.Close()
+			raw, _ = json.Marshal(map[string]any{"url": backend.URL, "allowInsecureHTTP": true})
+			if err := os.WriteFile(f.config.ConnectionFile, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			f.client.Config.Collection.MaxWindowBytes = 1024
+			f.client.Config.Collection.MaxLineBytes = 1024
+			switch limit {
+			case "bytes":
+				f.c.Config.Collection.MaxWindowTotalBytes = parentBytes + int64(lineBytes)
+			case "records":
+				f.c.Config.Collection.MaxWindowRecords = int64(parentRecords) // discarded parent + left
+			}
+			end := start + int64(4*time.Second)
+			err := f.c.Window(context.Background(), start, end, true)
+			var cursor int64
+			_ = f.c.Store.Get("cursor", &cursor)
+			if limit == "ordinary" {
+				if err != nil || calls != 3 || cursor != end {
+					t.Fatalf("ordinary adaptive split failed: %v calls=%d cursor=%d", err, calls, cursor)
+				}
+				f.counts(t, 2, 2)
+			} else {
+				if err == nil || err.Error() != "window_budget" || calls != 3 || cursor != start+int64(2*time.Second) {
+					t.Fatalf("%s budget reset across children: %v calls=%d cursor=%d", limit, err, calls, cursor)
+				}
+				f.counts(t, 1, 1)
+			}
+			stages, _ := filepath.Glob(filepath.Join(f.config.RuntimeDir, "window-*"))
+			if len(stages) != 0 {
+				t.Fatal("stages leaked", stages)
+			}
+		})
+	}
+}
+
+func TestRootWindowDeadlineIsSharedAcrossChildren(t *testing.T) {
+	f := newFixture(t)
+	f.c.Config.Collection.WindowTimeout = "1s"
+	calls := 0
+	var rootDeadline time.Time
+	f.c.Backend = backendFunc(func(ctx context.Context, start, end int64) (source.Result, error) {
+		calls++
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("missing root deadline")
+		}
+		if calls == 1 {
+			rootDeadline = deadline
+			timer := time.NewTimer(100 * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+			}
+			return source.Result{}, &source.QueryError{Reason: "timeout", Split: true}
+		}
+		if deadline != rootDeadline {
+			t.Fatal("child reset root deadline")
+		}
+		if calls == 2 {
+			return f.client.Fetch(ctx, start, end)
+		}
+		<-ctx.Done()
+		return source.Result{}, &source.QueryError{Reason: "timeout", Split: true}
+	})
+	start := f.now.UnixNano()
+	began := time.Now()
+	err := f.c.Window(context.Background(), start, start+int64(4*time.Second), true)
+	if err == nil || err.Error() != "window_budget" || calls != 3 || time.Since(began) > 3*time.Second {
+		t.Fatalf("deadline escaped: %v calls=%d elapsed=%v", err, calls, time.Since(began))
+	}
+	var cursor int64
+	_ = f.c.Store.Get("cursor", &cursor)
+	if cursor != start+int64(2*time.Second) {
+		t.Fatalf("deadline advanced over failed child: %d", cursor)
+	}
 }

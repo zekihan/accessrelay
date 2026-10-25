@@ -96,15 +96,18 @@
               "properties": {
                 "cluster": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "^[^\\r\\n\\x00]+$"
                 },
                 "namespace": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "^[^\\r\\n\\x00]+$"
                 },
                 "container": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "pattern": "^[^\\r\\n\\x00]+$"
                 }
               }
             },
@@ -117,6 +120,25 @@
               "type": "integer",
               "minimum": 1024,
               "maximum": 1073741824
+            },
+            "maxWindowQueries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "maxWindowTotalBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 4294967296
+            },
+            "maxWindowRecords": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000000
+            },
+            "windowTimeout": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(s|m|h)$"
             }
           }
         },
@@ -331,26 +353,57 @@
     },
     "connectionSecret": {
       "type": "string",
-      "minLength": 1
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
     },
     "terminationGracePeriodSeconds": {
       "type": "integer",
-      "minimum": 30
+      "minimum": 30,
+      "maximum": 3600
     },
     "networkPolicy": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressPeers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "victoriaLogsPeers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
         "victoriaLogsPort": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
+        },
+        "extraIngress": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "extraEgress": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       }
     },
     "selectorLabels": {
       "type": "object",
       "additionalProperties": {
-        "type": "string"
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$"
       },
       "propertyNames": {
         "not": {
@@ -358,8 +411,452 @@
             "app.kubernetes.io/name",
             "app.kubernetes.io/instance"
           ]
+        },
+        "pattern": "^[^\\r\\n\\x00]+$"
+      }
+    },
+    "nameOverride": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "fullnameOverride": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^([a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127})?$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[a-fA-F0-9]{64})?$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      },
+      "required": [
+        "repository",
+        "tag",
+        "digest",
+        "pullPolicy"
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$"
+      },
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$",
+        "minLength": 1
+      }
+    },
+    "podLabels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$"
+      },
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$",
+        "minLength": 1
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+|[numkKMGTPE]|[KMGTPE]i)?$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+|[numkKMGTPE]|[KMGTPE]i)?$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
         }
       }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingClaim": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+|[numkKMGTPE]|[KMGTPE]i)?$"
+        },
+        "storageClass": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "runtimeSizeLimit": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+|[numkKMGTPE]|[KMGTPE]i)?$"
+    },
+    "tmpSizeLimit": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+|[numkKMGTPE]|[KMGTPE]i)?$"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "startup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "successThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          }
+        },
+        "liveness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "successThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "successThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "minLength": 1
+          }
+        },
+        "host": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                }
+              },
+              "secretName": {
+                "type": "string",
+                "maxLength": 253,
+                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+              }
+            }
+          }
+        },
+        "extraPaths": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "authService": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "externalName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$"
+      },
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[^\\r\\n\\x00]*$",
+        "minLength": 1
+      }
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
     }
-  }
+  },
+  "additionalProperties": false
 }

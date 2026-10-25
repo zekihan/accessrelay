@@ -19,7 +19,11 @@
     "queryTimeout": "20s",
     "staleAfter": "2m",
     "maxLineBytes": 1048576,
-    "maxWindowBytes": 268435456
+    "maxWindowBytes": 268435456,
+    "maxWindowQueries": 64,
+    "maxWindowTotalBytes": 536870912,
+    "maxWindowRecords": 1000000,
+    "windowTimeout": "2m"
   },
   "report": {
     "historyDays": 7,

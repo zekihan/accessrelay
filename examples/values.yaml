@@ -6,18 +6,13 @@ config:
       namespace: traefik
       container: traefik
   report:
-    websocketURL: wss://accessrelay.example.invalid/ws
+    websocketURL: ws://localhost:8080/ws
+# Reports contain client IPs and query strings. Keep external access disabled
+# until an operator configures and verifies authentication for every route.
 ingress:
-  enabled: true
-  host: accessrelay.example.invalid
-  tls:
-    - hosts: [accessrelay.example.invalid]
-      secretName: accessrelay-tls
+  enabled: false
 networkPolicy:
-  ingressPeers:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: ingress-system
+  ingressPeers: []
   victoriaLogsPeers:
     - namespaceSelector:
         matchLabels:

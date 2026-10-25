@@ -14,7 +14,7 @@ CHART = ROOT / "charts/accessrelay"
 
 def render(*args):
     result = subprocess.run(
-        ["helm", "template", "goaccess", str(CHART), "-n", "goaccess", *args],
+        [os.environ.get("HELM", "helm"), "template", "goaccess", str(CHART), "-n", "goaccess", *args],
         check=True,
         capture_output=True,
         text=True,
@@ -101,6 +101,77 @@ class ChartTests(unittest.TestCase):
             next(x for x in objects if x["kind"] == "Service")["spec"]["selector"],
             expected,
         )
+
+    def test_documented_install_has_no_external_report_route(self):
+        objects = render("--values", str(ROOT / "examples/values.yaml"))
+        self.assertFalse(any(x["kind"] == "Ingress" for x in objects))
+        service = next(x for x in objects if x["kind"] == "Service")
+        self.assertEqual(service["spec"]["type"], "ClusterIP")
+        policy = next(x for x in objects if x["kind"] == "NetworkPolicy")
+        self.assertFalse(policy["spec"]["ingress"])
+
+    def test_every_direct_scalar_sink_rejects_line_breaks(self):
+        # These paths cover user-controlled scalars emitted directly by templates,
+        # plus image helper components. Other maps/lists use YAML serialization.
+        paths = [
+            "nameOverride", "fullnameOverride", "replicaCount",
+            "image.repository", "image.tag", "image.digest", "image.pullPolicy",
+            "connectionSecret", "terminationGracePeriodSeconds",
+            "storage.existingClaim", "storage.size", "storage.storageClass",
+            "runtimeSizeLimit", "tmpSizeLimit", "service.type", "service.port",
+            "authService.name", "authService.externalName", "authService.port",
+            "networkPolicy.victoriaLogsPort", "ingress.host", "ingress.className",
+        ]
+        for path in paths:
+            for newline in ["\n", "\r"]:
+                with self.subTest(path=path, newline=repr(newline)):
+                    values = {}
+                    target = values
+                    parts = path.split(".")
+                    for key in parts[:-1]:
+                        target = target.setdefault(key, {})
+                    target[parts[-1]] = "IfNotPresent" + newline + "        - name: injected"
+                    with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+                        json.dump(values, f)
+                        f.flush()
+                        with self.assertRaises(subprocess.CalledProcessError) as failure:
+                            render("--values", f.name)
+                        self.assertIn("schema", failure.exception.stderr.lower())
+
+    def test_scalar_serialization_prevents_injection_without_schema(self):
+        payload = 'IfNotPresent\n        - name: injected\n          securityContext: {privileged: true}'
+        values = {
+            "image": {"repository": 'example.invalid/repo"\nmalicious: true', "pullPolicy": payload},
+            "connectionSecret": 'secret\n            malicious: true',
+            "storage": {"existingClaim": 'claim\n            malicious: true'},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            json.dump(values, f)
+            f.flush()
+            objects = render("--skip-schema-validation", "--values", f.name)
+        pod = next(x for x in objects if x["kind"] == "Deployment")["spec"]["template"]["spec"]
+        self.assertEqual(len(pod["containers"]), 1)
+        self.assertNotIn("initContainers", pod)
+        self.assertEqual(pod["containers"][0]["imagePullPolicy"], payload)
+        self.assertFalse(pod["containers"][0]["securityContext"]["allowPrivilegeEscalation"])
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+
+    def test_unknown_scalar_settings_and_types_rejected(self):
+        for values in [
+            {"image": {"pullPolicy": "sometimes"}},
+            {"image": {"unexpected": "value"}},
+            {"storage": {"unexpected": "value"}},
+            {"service": {"unexpected": "value"}},
+            {"authService": {"unexpected": "value"}},
+            {"probes": {"startup": {"exec": {"command": ["bad"]}}}},
+            {"service": {"port": "8080"}},
+            {"runtimeSizeLimit": "3Gi # comment"},
+        ]:
+            with self.subTest(values=values), tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+                json.dump(values, f)
+                f.flush()
+                with self.assertRaises(subprocess.CalledProcessError):
+                    render("--values", f.name)
 
     def test_unsafe_overrides_fail(self):
         for flag in [

@@ -30,6 +30,10 @@ type Collection struct {
 	StaleAfter             string `json:"staleAfter"`
 	MaxLineBytes           int    `json:"maxLineBytes"`
 	MaxWindowBytes         int64  `json:"maxWindowBytes"`
+	MaxWindowQueries       int    `json:"maxWindowQueries"`
+	MaxWindowTotalBytes    int64  `json:"maxWindowTotalBytes"`
+	MaxWindowRecords       int64  `json:"maxWindowRecords"`
+	WindowTimeout          string `json:"windowTimeout"`
 }
 type Report struct {
 	HistoryDays     int               `json:"historyDays"`
@@ -60,7 +64,7 @@ type Config struct {
 
 func Default() Config {
 	return Config{Listen: ":8080", StateDir: "/state", RuntimeDir: "/runtime", ConnectionFile: "/connection/connection.json", GoAccessBinary: "goaccess",
-		Collection: Collection{Source: Source{Namespace: "traefik", Container: "traefik"}, PollInterval: "5s", IngestionDelay: "30s", Overlap: "5m", ReconciliationInterval: "1h", BackfillWindow: "5m", MinimumWindow: "1s", QueryTimeout: "20s", StaleAfter: "2m", MaxLineBytes: 1048576, MaxWindowBytes: 268435456},
+		Collection: Collection{Source: Source{Namespace: "traefik", Container: "traefik"}, PollInterval: "5s", IngestionDelay: "30s", Overlap: "5m", ReconciliationInterval: "1h", BackfillWindow: "5m", MinimumWindow: "1s", QueryTimeout: "20s", StaleAfter: "2m", MaxLineBytes: 1048576, MaxWindowBytes: 268435456, MaxWindowQueries: 64, MaxWindowTotalBytes: 536870912, MaxWindowRecords: 1000000, WindowTimeout: "2m"},
 		Report:     Report{HistoryDays: 7, Jobs: 6, ChunkSize: 8192, WebsocketURL: "ws://localhost:8080/ws", ConfigOverrides: map[string]string{}},
 		Limits:     Limits{MaxRuntimeBytes: 2684354560, MaxDatabaseBytes: 1610612736, MaxReplayBytes: 1073741824, MaxReportBytes: 67108864, DiagnosticBytes: 8388608, ReserveBytes: 33554432}}
 }
@@ -87,7 +91,7 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
-	for _, s := range []string{c.Collection.PollInterval, c.Collection.IngestionDelay, c.Collection.Overlap, c.Collection.ReconciliationInterval, c.Collection.BackfillWindow, c.Collection.MinimumWindow, c.Collection.QueryTimeout, c.Collection.StaleAfter} {
+	for _, s := range []string{c.Collection.PollInterval, c.Collection.IngestionDelay, c.Collection.Overlap, c.Collection.ReconciliationInterval, c.Collection.BackfillWindow, c.Collection.MinimumWindow, c.Collection.QueryTimeout, c.Collection.StaleAfter, c.Collection.WindowTimeout} {
 		d, err := time.ParseDuration(s)
 		if !positiveDuration.MatchString(s) || err != nil || d > 24*time.Hour {
 			return errors.New("configuration_duration")
@@ -95,6 +99,9 @@ func (c Config) Validate() error {
 	}
 	if Duration(c.Collection.MinimumWindow) > Duration(c.Collection.BackfillWindow) || c.Collection.MaxLineBytes < 1024 || c.Collection.MaxLineBytes > 16777216 || c.Collection.MaxWindowBytes < int64(c.Collection.MaxLineBytes) || c.Collection.MaxWindowBytes > 1073741824 {
 		return errors.New("configuration_window")
+	}
+	if c.Collection.MaxWindowQueries < 1 || c.Collection.MaxWindowQueries > 1024 || c.Collection.MaxWindowTotalBytes < 1024 || c.Collection.MaxWindowTotalBytes > 4294967296 || c.Collection.MaxWindowRecords < 1 || c.Collection.MaxWindowRecords > 10000000 {
+		return errors.New("configuration_window_budget")
 	}
 	if c.Report.HistoryDays < 1 || c.Report.HistoryDays > 366 || c.Report.Jobs < 1 || c.Report.Jobs > 64 || c.Report.ChunkSize < 1 || c.Report.ChunkSize > 1048576 {
 		return errors.New("configuration_report")
