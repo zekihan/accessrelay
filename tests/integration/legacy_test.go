@@ -136,7 +136,7 @@ func TestRetainedDatabaseCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Export(f, 0, true, 1073741824); err != nil {
+	if _, err = s.Export(context.Background(), f, 0, true, 1073741824, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.Close(); err != nil {

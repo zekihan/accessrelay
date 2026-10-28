@@ -91,7 +91,13 @@ Status exposes opaque reason codes and contains no backend credentials.
 ## retention and sizing
 
 Set local and backend retention together. Local pruning occurs at UTC day
-rollover even during an outage. Only twenty lost intervals are retained in
+rollover even during an outage. Expired events and their change records are
+removed in transactions of at most 1,000 events. Each committed batch updates
+the collector heartbeat, so a large daily cleanup can make progress without
+failing liveness. Full and incremental replays also report progress every 1,000 written lines.
+Shutdown cancels retention and replay SQL; committed batches remain
+pruned and the next run resumes the same cutoff before rebuilding the report.
+A stalled batch still fails the normal progress health check. Only twenty lost intervals are retained in
 status, bounding metadata. A successful empty backend response cannot identify
 expired upstream logs, so backend retention should be monitored independently.
 

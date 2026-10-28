@@ -214,25 +214,55 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 	}
 	return nil
 }
-func (s *Store) Prune(cutoff int64) (int64, error) {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return 0, errors.New("database_transaction")
+
+const pruneBatchSize = 1000
+
+func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (int64, error) {
+	var removed int64
+	for {
+		tx, err := s.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return removed, storageError(ctx, "database_transaction")
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM events WHERE id IN (
+			SELECT id FROM events WHERE time_ns<? ORDER BY time_ns,id LIMIT ?
+		)`, cutoff, pruneBatchSize)
+		if err != nil {
+			_ = tx.Rollback()
+			return removed, storageError(ctx, "database_transaction")
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return removed, errors.New("database_transaction")
+		}
+		if err = tx.Commit(); err != nil {
+			return removed, storageError(ctx, "database_transaction")
+		}
+		removed += n
+		if progress != nil {
+			progress()
+		}
+		if n < pruneBatchSize {
+			break
+		}
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := tx.Exec("DELETE FROM events WHERE time_ns<?", cutoff)
-	if err != nil {
-		return 0, errors.New("database_transaction")
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`); err != nil {
+		return removed, storageError(ctx, "database_transaction")
 	}
-	n, _ := result.RowsAffected()
-	if _, err = tx.Exec(`DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`); err != nil || tx.Commit() != nil {
-		return 0, errors.New("database_transaction")
+	if _, err := s.DB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return removed, storageError(ctx, "database_checkpoint")
 	}
-	if _, err = s.DB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		return n, errors.New("database_checkpoint")
-	}
-	return n, nil
+	return removed, nil
 }
+
+func storageError(ctx context.Context, code string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New(code)
+}
+
 func (s *Store) Counts() (int64, int64, error) {
 	var events, copies int64
 	err := s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(occurrences),0) FROM events`).Scan(&events, &copies)
@@ -243,49 +273,56 @@ func (s *Store) Latest() (int64, error) {
 	err := s.DB.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&seq)
 	return seq, err
 }
-func (s *Store) Export(output io.Writer, after int64, full bool, maxBytes int64) (latest int64, err error) {
-	tx, err := s.DB.Begin()
+func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full bool, maxBytes int64, progress func()) (latest int64, err error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, errors.New("export_database")
+		return 0, storageError(ctx, "export_database")
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err = tx.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&latest); err != nil {
-		return 0, errors.New("export_database")
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&latest); err != nil {
+		return 0, storageError(ctx, "export_database")
 	}
 	var rows *sql.Rows
 	if full {
-		rows, err = tx.Query(`SELECT message,occurrences FROM events ORDER BY time_ns,id`)
+		rows, err = tx.QueryContext(ctx, `SELECT message,occurrences FROM events ORDER BY time_ns,id`)
 	} else {
-		rows, err = tx.Query(`SELECT e.message,c.copies FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`, after)
+		rows, err = tx.QueryContext(ctx, `SELECT e.message,c.copies FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`, after)
 	}
 	if err != nil {
-		return 0, errors.New("export_database")
+		return 0, storageError(ctx, "export_database")
 	}
 	defer func() { _ = rows.Close() }()
-	var written int64
+	var written, lines int64
 	for rows.Next() {
 		var message string
 		var copies int64
 		if rows.Scan(&message, &copies) != nil || copies < 1 {
-			return 0, errors.New("export_database")
+			return 0, storageError(ctx, "export_database")
 		}
 		line := message + "\n"
 		if copies > (maxBytes-written)/int64(len(line)) {
 			return 0, errors.New("replay_limit")
 		}
 		for range copies {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			if _, err = io.WriteString(output, line); err != nil {
 				return 0, errors.New("export_write")
 			}
 			written += int64(len(line))
+			lines++
+			if progress != nil && lines%1000 == 0 {
+				progress()
+			}
 		}
 	}
 	if rows.Err() != nil {
-		return 0, errors.New("export_database")
+		return 0, storageError(ctx, "export_database")
 	}
 	_ = rows.Close()
 	if tx.Commit() != nil {
-		return 0, errors.New("export_database")
+		return 0, storageError(ctx, "export_database")
 	}
 	return latest, nil
 }

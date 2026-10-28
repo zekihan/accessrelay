@@ -335,7 +335,7 @@ func TestDatabaseBudgetAllowsReusingPrunedPages(t *testing.T) {
 		t.Fatal(pageCount, err)
 	}
 	f.c.Config.Limits.MaxDatabaseBytes = pageCount * pageSize
-	if _, err := f.c.Store.Prune(1); err != nil {
+	if _, err := f.c.Store.Prune(context.Background(), 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	var freelist int64
@@ -363,7 +363,7 @@ func TestNewRejectsLowerDatabaseBudgetBelowPrunedHighWaterMark(t *testing.T) {
 			t.Fatal("failed to build high-water database:", err)
 		}
 	}
-	if _, err := f.c.Store.Prune(1); err != nil {
+	if _, err := f.c.Store.Prune(context.Background(), 1, nil); err != nil {
 		t.Fatal("failed to prune high-water database:", err)
 	}
 	var pageSize, pageCount, freePages int64
@@ -708,4 +708,27 @@ func TestMalformedSourceIdentityRejectedAndLockReleased(t *testing.T) {
 		t.Fatal("writer lock was not released:", err)
 	}
 	_ = reopened.Close()
+}
+
+func TestReplayProgressKeepsCollectorHealthy(t *testing.T) {
+	f := newFixture(t)
+	for range 2001 {
+		f.rows = append(f.rows, f.row("2026-10-01T00:01:00Z", "a"))
+	}
+	f.window(t)
+	f.c.lastLoop = time.Now().Add(-time.Hour)
+	f.c.dirty = true
+	if f.c.Healthy(time.Now()) {
+		t.Fatal("fixture must begin past the progress deadline")
+	}
+	if err := f.c.Export(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !f.c.Healthy(time.Now()) {
+		t.Fatal("completed replay writes did not renew the progress heartbeat")
+	}
+	if f.c.Healthy(time.Now().Add(time.Hour)) {
+		t.Fatal("a stalled collector must still fail the progress health check")
+	}
+	f.counts(t, 1, 2001)
 }

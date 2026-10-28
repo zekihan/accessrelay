@@ -162,6 +162,12 @@ func HistoryStart(now time.Time, days int) int64 {
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -days+1).UnixNano()
 }
 func (c *Collector) Snapshot() Status { c.mu.RLock(); defer c.mu.RUnlock(); return c.status }
+func (c *Collector) progress() {
+	c.mu.Lock()
+	c.lastLoop = time.Now()
+	c.mu.Unlock()
+}
+
 func (c *Collector) Healthy(now time.Time) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -336,7 +342,7 @@ func (c *Collector) rotate(ctx context.Context) error {
 	if err != nil {
 		return errors.New("export_storage")
 	}
-	seq, err := c.Store.Export(f, 0, true, c.Config.Limits.MaxReplayBytes)
+	seq, err := c.Store.Export(ctx, f, 0, true, c.Config.Limits.MaxReplayBytes, c.progress)
 	if err != nil {
 		_ = f.Close()
 		return err
@@ -406,7 +412,7 @@ func (c *Collector) Export(ctx context.Context) error {
 			err = errors.New("export_storage")
 		} else {
 			var seq int64
-			seq, err = c.Store.Export(f, c.exported, false, c.Config.Limits.MaxReplayBytes-info.Size())
+			seq, err = c.Store.Export(ctx, f, c.exported, false, c.Config.Limits.MaxReplayBytes-info.Size(), c.progress)
 			if err == nil {
 				err = f.Sync()
 			}
@@ -508,11 +514,11 @@ func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 	cutoff := HistoryStart(now, c.Config.Report.HistoryDays)
 	target := now.Add(-config.Duration(c.Config.Collection.IngestionDelay)).UnixNano()
 	if c.cutoff != cutoff {
-		if _, err := c.Store.Prune(cutoff); err != nil {
+		c.dirty = true
+		if _, err := c.Store.Prune(ctx, cutoff, c.progress); err != nil {
 			return false, err
 		}
 		c.cutoff = cutoff
-		c.dirty = true
 		c.reconcileEnd = 0
 		c.timeReconcile = time.Time{}
 		c.forwardTurn = false
