@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -50,12 +51,19 @@ func Open(dir string) (s *Store, err error) {
 			_ = s.Close()
 		}
 	}()
-	s.DB, err = sql.Open("sqlite", s.Path)
+	// database/sql may replace a failed connection (including after an
+	// interrupted query). Connection-local settings must follow every open.
+	dsn := url.URL{Scheme: "file", Path: s.Path}
+	dsn.RawQuery = url.Values{"_pragma": {
+		"foreign_keys(ON)", "journal_mode(WAL)", "synchronous(FULL)",
+		"busy_timeout(5000)", "journal_size_limit(8388608)",
+	}}.Encode()
+	s.DB, err = sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, errors.New("database_open")
 	}
 	s.DB.SetMaxOpenConns(1)
-	if _, err = s.DB.Exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA journal_size_limit=8388608;`); err != nil {
+	if err = s.DB.Ping(); err != nil {
 		return s, errors.New("database_open")
 	}
 	var version int
