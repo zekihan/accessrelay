@@ -42,3 +42,34 @@ func TestGoAccessBooleanOverrideSpellingsRemainAccepted(t *testing.T) {
 		}
 	}
 }
+
+func TestStateRuntimeDirectorySeparation(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, runtime string
+		overlap              bool
+	}{
+		{"same", "/state", "/state", true},
+		{"runtime below state", "/state", "/state/runtime", true},
+		{"state below runtime", "/runtime/state", "/runtime", true},
+		{"root state", "/", "/runtime", true},
+		{"root runtime", "/state", "/", true},
+		{"cleaned root state", "/unused/..", "/runtime", true},
+		{"cleaned root runtime", "/state", "/unused/..", true},
+		{"siblings", "/state", "/runtime", false},
+		{"shared prefix", "/state", "/state-runtime", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.Collection.Source.Cluster = "fixture"
+			c.StateDir, c.RuntimeDir = tc.state, tc.runtime
+			err := c.Validate()
+			if tc.overlap {
+				if err == nil || err.Error() != "configuration_path_overlap" {
+					t.Fatalf("overlapping state %q and runtime %q: got %v, want configuration_path_overlap", tc.state, tc.runtime, err)
+				}
+			} else if err != nil {
+				t.Fatalf("separate directories rejected: %v", err)
+			}
+		})
+	}
+}

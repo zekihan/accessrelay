@@ -110,7 +110,9 @@ func (c Config) Validate() error {
 		}
 	}
 	state, runtime := filepath.Clean(c.StateDir), filepath.Clean(c.RuntimeDir)
-	if state == runtime || strings.HasPrefix(runtime, state+"/") || strings.HasPrefix(state, runtime+"/") {
+	// A root directory contains every absolute path; appending another slash
+	// would otherwise turn its containment prefix into "//".
+	if state == string(filepath.Separator) || runtime == string(filepath.Separator) || state == runtime || strings.HasPrefix(runtime, state+"/") || strings.HasPrefix(state, runtime+"/") {
 		return errors.New("configuration_path_overlap")
 	}
 	u, err := url.Parse(c.Report.WebsocketURL)
