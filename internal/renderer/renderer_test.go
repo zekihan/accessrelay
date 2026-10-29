@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -399,6 +400,36 @@ func TestUnreadyChildTimesOutAndIsReaped(t *testing.T) {
 				case <-deadline.C:
 					t.Fatalf("unready child did not time out: %+v", snapshot)
 				}
+			}
+		})
+	}
+}
+
+func TestStartCanceledDoesNotChangeGeneration(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		name := "idle"
+		if running {
+			name = "existing-generation"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := newTestRenderer(t)
+			if !running {
+				if err := r.Stop(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			previous := r.Generation()
+			child := r.cmd
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if err := r.Start(ctx, "canceled-generation"); !errors.Is(err, context.Canceled) {
+				t.Errorf("Start error = %v, want context.Canceled", err)
+			}
+			if got := r.Generation(); got != previous || r.cmd != child {
+				t.Errorf("canceled Start replaced generation %q with %q", previous, got)
+			}
+			if _, err := os.Stat(filepath.Join(r.Config.RuntimeDir, "generations", "canceled-generation")); !os.IsNotExist(err) {
+				t.Errorf("canceled Start prepared a generation: %v", err)
 			}
 		})
 	}
