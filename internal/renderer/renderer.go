@@ -97,6 +97,9 @@ func (r *Renderer) prepareDiagnosticPath(path string) error {
 func (r *Renderer) Start(ctx context.Context, generation string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := r.stopLocked(ctx); err != nil {
 		return err
 	}
@@ -104,6 +107,10 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 }
 
 func (r *Renderer) startLocked(ctx context.Context, generation string) error {
+	// Stopping the previous child can consume the caller's remaining deadline.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	childStarted := false
 	defer func() {
 		if !childStarted {
@@ -160,6 +167,9 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TZ=UTC", "LANG=C.UTF-8", "HOME=" + r.Config.RuntimeDir, "TMPDIR=" + r.Config.RuntimeDir}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if cmd.Start() != nil {
 		r.failedLocked("renderer_start")
 		return errors.New("renderer_start")
