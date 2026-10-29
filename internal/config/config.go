@@ -75,13 +75,21 @@ func Load(path string) (Config, error) {
 		return c, errors.New("configuration_unreadable")
 	}
 	defer func() { _ = f.Close() }()
-	dec := json.NewDecoder(io.LimitReader(f, 1048577))
+	// Read one byte beyond the limit so an artificial EOF cannot hide
+	// trailing data or make an oversized configuration appear complete.
+	const maxConfigBytes = 1 << 20
+	limited := &io.LimitedReader{R: f, N: maxConfigBytes + 1}
+	dec := json.NewDecoder(limited)
 	dec.DisallowUnknownFields()
 	if dec.Decode(&c) != nil {
 		return c, errors.New("configuration_invalid")
 	}
 	var tail any
-	if dec.Decode(&tail) != io.EOF {
+	tailErr := dec.Decode(&tail)
+	if limited.N == 0 {
+		return c, errors.New("configuration_invalid")
+	}
+	if tailErr != io.EOF {
 		return c, errors.New("configuration_trailing_data")
 	}
 	return c, c.Validate()

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +70,31 @@ func TestStateRuntimeDirectorySeparation(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("separate directories rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigurationSizeBoundary(t *testing.T) {
+	const limit = 1 << 20
+	const document = `{"collection":{"source":{"cluster":"fixture"}}}`
+	for _, tc := range []struct {
+		name, raw string
+		wantError bool
+	}{
+		{"at limit", document + strings.Repeat(" ", limit-len(document)), false},
+		{"one byte over limit", document + strings.Repeat(" ", limit+1-len(document)), true},
+		{"hidden trailing document", document + strings.Repeat(" ", limit+1-len(document)) + `{}`, true},
+		{"ordinary trailing document", document + `{}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tc.raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Load (%d bytes): error = %v, want error = %v", len(tc.raw), err, tc.wantError)
 			}
 		})
 	}
