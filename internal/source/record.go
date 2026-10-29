@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$`)
+var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
 var clf = regexp.MustCompile(`^\S+ - \S+ \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `)
 
 func Timestamp(ns int64) string {

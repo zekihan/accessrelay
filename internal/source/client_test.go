@@ -201,3 +201,58 @@ func TestDecodeRejectsUnpairedSurrogateEscapes(t *testing.T) {
 		t.Fatal(op, err)
 	}
 }
+
+func TestRejectsOutOfRangeTimestampOffsets(t *testing.T) {
+	for _, stamp := range []string{
+		"2026-10-01T00:01:00+24:00",
+		"2026-10-01T00:01:00-24:00",
+		"2026-10-01T00:01:00+00:60",
+		"2026-10-01T00:01:00-00:60",
+	} {
+		t.Run(stamp, func(t *testing.T) {
+			if ns, err := ParseTimestamp(stamp); err == nil {
+				t.Fatalf("accepted invalid offset as %s", Timestamp(ns))
+			}
+		})
+	}
+}
+
+func TestFetchRejectsInvalidOffsetAfterValidRecord(t *testing.T) {
+	start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
+	end, _ := ParseTimestamp("2026-10-01T00:05:00Z")
+	row := map[string]string{"_time": "2026-10-01T00:01:00Z", "_stream_id": "fixture", "_msg": Line}
+	valid, _ := json.Marshal(row)
+	// Go's time parser normalizes +00:60 to +01:00. This malformed record
+	// would therefore land inside the requested window and be committed.
+	row["_time"] = "2026-10-01T01:01:00+00:60"
+	invalid, _ := json.Marshal(row)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "%s\n%s\n", valid, invalid)
+	}))
+	defer backend.Close()
+	cfg := config.Default()
+	cfg.RuntimeDir = t.TempDir()
+	cfg.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
+	connection, _ := json.Marshal(map[string]string{"url": backend.URL})
+	if err := os.WriteFile(cfg.ConnectionFile, connection, 0600); err != nil {
+		t.Fatal(err)
+	}
+	client := New(cfg)
+	defer client.Close()
+	result, err := client.Fetch(context.Background(), start, end)
+	if err == nil {
+		_ = os.Remove(result.Path)
+		t.Fatal("accepted a window containing an invalid timestamp offset")
+	}
+	if err.Error() != "invalid_record" {
+		t.Fatalf("error = %q, want invalid_record", err)
+	}
+	entries, err := os.ReadDir(cfg.RuntimeDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed window left stages: %v, %v", entries, err)
+	}
+	// The legal maximum offset remains supported with nanosecond precision.
+	if ns, err := ParseTimestamp("2026-10-01T23:59:00.123456789+23:59"); err != nil || Timestamp(ns) != "2026-10-01T00:00:00.123456789Z" {
+		t.Fatalf("legal offset: %s, %v", Timestamp(ns), err)
+	}
+}
