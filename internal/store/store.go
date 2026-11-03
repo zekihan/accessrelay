@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -300,6 +301,7 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 		return 0, storageError(ctx, "export_database")
 	}
 	defer func() { _ = rows.Close() }()
+	buffer := bufio.NewWriterSize(output, 256*1024)
 	var written, lines int64
 	for rows.Next() {
 		var message string
@@ -315,7 +317,7 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
-			if _, err = io.WriteString(output, line); err != nil {
+			if _, err = buffer.WriteString(line); err != nil {
 				return 0, errors.New("export_write")
 			}
 			written += int64(len(line))
@@ -329,6 +331,15 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 		return 0, storageError(ctx, "export_database")
 	}
 	_ = rows.Close()
+	if err = ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err = buffer.Flush(); err != nil {
+		return 0, storageError(ctx, "export_write")
+	}
+	if err = ctx.Err(); err != nil {
+		return 0, err
+	}
 	if tx.Commit() != nil {
 		return 0, storageError(ctx, "export_database")
 	}
