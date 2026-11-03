@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/zekihan/accessrelay/internal/telemetry"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
@@ -35,6 +36,8 @@ type Store struct {
 }
 
 func Open(dir string) (s *Store, err error) {
+	opening := telemetry.Start("database_open")
+	defer func() { opening.Finish(err == nil) }()
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("state_storage")
 	}
@@ -107,7 +110,10 @@ func Open(dir string) (s *Store, err error) {
 		}
 	}
 	var quick string
-	if err = s.DB.QueryRow(`PRAGMA quick_check`).Scan(&quick); err != nil || quick != "ok" {
+	integrity := telemetry.Start("database_integrity")
+	err = s.DB.QueryRow(`PRAGMA quick_check`).Scan(&quick)
+	integrity.Finish(err == nil && quick == "ok")
+	if err != nil || quick != "ok" {
 		return s, errors.New("database_integrity")
 	}
 	return s, nil
@@ -226,8 +232,11 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 
 const pruneBatchSize = 1000
 
-func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (int64, error) {
-	var removed int64
+func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (removed int64, err error) {
+	retention := telemetry.Start("retention")
+	defer func() { retention.Finish(err == nil) }()
+	deletion := telemetry.Start("retention_delete")
+	defer func() { deletion.Finish(err == nil) }()
 	for {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
@@ -249,6 +258,7 @@ func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (int64
 			return removed, storageError(ctx, "database_transaction")
 		}
 		removed += n
+		deletion.Progress(removed)
 		if progress != nil {
 			progress()
 		}
@@ -256,10 +266,17 @@ func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (int64
 			break
 		}
 	}
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`); err != nil {
+	deletion.Finish(true)
+	cleanup := telemetry.Start("source_cleanup")
+	_, err = s.DB.ExecContext(ctx, `DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`)
+	cleanup.Finish(err == nil)
+	if err != nil {
 		return removed, storageError(ctx, "database_transaction")
 	}
-	if _, err := s.DB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	checkpoint := telemetry.Start("retention_checkpoint")
+	_, err = s.DB.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	checkpoint.Finish(err == nil)
+	if err != nil {
 		return removed, storageError(ctx, "database_checkpoint")
 	}
 	return removed, nil
@@ -283,6 +300,15 @@ func (s *Store) Latest() (int64, error) {
 	return seq, err
 }
 func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full bool, maxBytes int64, progress func()) (latest int64, err error) {
+	var replay *telemetry.Phase
+	if full {
+		replay = telemetry.Start("replay_export")
+	}
+	var written, lines int64
+	defer func() {
+		replay.Progress(lines)
+		replay.Finish(err == nil)
+	}()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, storageError(ctx, "export_database")
@@ -302,7 +328,6 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 	}
 	defer func() { _ = rows.Close() }()
 	buffer := bufio.NewWriterSize(output, 256*1024)
-	var written, lines int64
 	for rows.Next() {
 		var message string
 		var copies int64
@@ -322,8 +347,11 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 			}
 			written += int64(len(line))
 			lines++
-			if progress != nil && lines%1000 == 0 {
-				progress()
+			if lines%1000 == 0 {
+				replay.Progress(lines)
+				if progress != nil {
+					progress()
+				}
 			}
 		}
 	}

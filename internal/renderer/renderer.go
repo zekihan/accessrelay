@@ -19,6 +19,7 @@ import (
 
 	"github.com/zekihan/accessrelay/internal/assets"
 	"github.com/zekihan/accessrelay/internal/config"
+	"github.com/zekihan/accessrelay/internal/telemetry"
 )
 
 type Snapshot struct {
@@ -28,18 +29,19 @@ type Snapshot struct {
 	Error    string `json:"error,omitempty"`
 }
 type Renderer struct {
-	Config      config.Config
-	mu          sync.Mutex
-	cmd         *exec.Cmd
-	done        chan struct{}
-	generation  string
-	output      string
-	retry       time.Time
-	backoff     time.Duration
-	status      Snapshot
-	startedAt   time.Time
-	initTimeout time.Duration
-	diagnostics []*diagnosticCapture
+	Config         config.Config
+	mu             sync.Mutex
+	cmd            *exec.Cmd
+	done           chan struct{}
+	generation     string
+	output         string
+	retry          time.Time
+	backoff        time.Duration
+	status         Snapshot
+	startedAt      time.Time
+	initTimeout    time.Duration
+	initialization *telemetry.Phase
+	diagnostics    []*diagnosticCapture
 }
 
 func New(c config.Config) (*Renderer, error) {
@@ -111,9 +113,11 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	r.initialization = telemetry.Start("renderer_initialize")
 	childStarted := false
 	defer func() {
 		if !childStarted {
+			r.initialization.Finish(false)
 			if r.stopDiagnosticsLocked() != nil {
 				r.status.Error = "renderer_diagnostic_storage"
 			}
@@ -216,6 +220,7 @@ func normalizedOverride(key, value string) string {
 	return value
 }
 func (r *Renderer) failedLocked(reason string) {
+	r.initialization.Finish(false)
 	r.cmd = nil
 	r.generation = ""
 	r.status.Running = false
@@ -227,6 +232,7 @@ func (r *Renderer) failedLocked(reason string) {
 	r.backoff = min(60*time.Second, r.backoff*2)
 }
 func (r *Renderer) stopLocked(ctx context.Context) error {
+	r.initialization.Finish(false)
 	if r.cmd == nil {
 		if r.stopDiagnosticsLocked() != nil {
 			return errors.New("renderer_diagnostic_storage")
@@ -379,6 +385,7 @@ func (r *Renderer) tick() {
 			return
 		}
 		r.status.Ready = true
+		r.initialization.Finish(true)
 		r.status.Error = ""
 		r.backoff = time.Second
 		// Old diagnostic caches from the Python/shell deployment are derived data.

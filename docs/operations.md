@@ -55,6 +55,37 @@ in the incident. Never restore or test against a database with an active writer.
 
 ## diagnose
 
+Startup and UTC rollover emit `phase_start`, `phase_progress` and `phase_finish`
+logs on stderr. Each includes a fixed `phase` identifier; progress and finish
+include `elapsed_seconds` and `completed`, and finish includes `success`.
+No paths, request contents, connection details or raw errors are logged.
+
+- `database_open` covers opening and validating SQLite, including the nested
+  `database_integrity` check. These run before the HTTP server starts.
+- `retention` covers `retention_delete`, `source_cleanup` and
+  `retention_checkpoint`. Deletion progress counts committed expired events.
+- `replay_build` covers stopping the old renderer, reclaiming its generation,
+  full export, file sync and starting the replacement child. `replay_export`
+  measures SQLite reads and buffered output, including the final buffer flush;
+  `replay_sync` measures the subsequent file sync.
+- `renderer_initialize` runs from child preparation until a complete report is
+  published and its WebSocket listener is reachable. It finishes unsuccessfully
+  if initialization fails, times out or is stopped before readiness.
+
+Replay progress counts lines accepted by the output buffer, including repeated
+occurrences; it does not establish that those bytes have been flushed or synced. Deletion
+and replay progress logs are limited to one per 30 seconds of advancing work;
+a blocked operation has a start record but no advancing progress. Counts are
+zero for phases without an event/line counter. Parent phases include nested
+durations, so do not add them together. Routine incremental exports do not emit
+phase logs. Use the last unfinished phase and completed phase durations to
+separate slow database checks, retention, replay writes and renderer startup.
+
+Full and incremental replay use a bounded 256KiB output buffer. The buffer must
+flush successfully before the caller syncs the file and advances its exported
+sequence or starts the renderer. A failed replay remains disposable and is
+rebuilt from SQLite; collection cursor and multiplicity semantics are unchanged.
+
 - `source_mismatch`: restore the cluster, namespace and container settings used
   when the database was bound. Use separate state for a different source; do not
   remove the binding to repurpose a populated database.

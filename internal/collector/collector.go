@@ -20,6 +20,7 @@ import (
 	"github.com/zekihan/accessrelay/internal/renderer"
 	"github.com/zekihan/accessrelay/internal/source"
 	"github.com/zekihan/accessrelay/internal/store"
+	"github.com/zekihan/accessrelay/internal/telemetry"
 	"golang.org/x/sys/unix"
 )
 
@@ -310,7 +311,9 @@ func ownedGenerationName(name string) bool {
 	}
 	return true
 }
-func (c *Collector) rotate(ctx context.Context) error {
+func (c *Collector) rotate(ctx context.Context) (err error) {
+	replay := telemetry.Start("replay_build")
+	defer func() { replay.Finish(err == nil) }()
 	// Stop before snapshotting: the old consumer must never see a partially rebuilt replay.
 	if err := c.Consumer.Stop(ctx); err != nil {
 		return err
@@ -347,7 +350,10 @@ func (c *Collector) rotate(ctx context.Context) error {
 		_ = f.Close()
 		return err
 	}
-	if f.Sync() != nil {
+	syncing := telemetry.Start("replay_sync")
+	err = f.Sync()
+	syncing.Finish(err == nil)
+	if err != nil {
 		_ = f.Close()
 		return errors.New("export_sync")
 	}
