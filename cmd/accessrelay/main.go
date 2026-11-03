@@ -47,6 +47,11 @@ func run() error {
 		return fmt.Errorf("http_listen")
 	}
 	defer func() { _ = listener.Close() }()
+	startup := service.NewStartupHandler()
+	server := &http.Server{Handler: startup, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
+	defer func() { _ = server.Close() }()
+	serving := make(chan error, 1)
+	go func() { serving <- server.Serve(listener) }()
 	backend := source.New(c)
 	defer backend.Close()
 	coll, err := collector.New(c, backend, nil)
@@ -62,9 +67,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go r.Run(ctx)
-	server := &http.Server{Handler: service.Handler(coll, r), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
-	serving := make(chan error, 1)
-	go func() { serving <- server.Serve(listener) }()
+	startup.Activate(service.Handler(coll, r))
 	finished := make(chan error, 1)
 	go func() { finished <- coll.Run(ctx) }()
 	var result error

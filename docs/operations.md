@@ -61,7 +61,12 @@ include `elapsed_seconds` and `completed`, and finish includes `success`.
 No paths, request contents, connection details or raw errors are logged.
 
 - `database_open` covers opening and validating SQLite, including the nested
-  `database_integrity` check. These run before the HTTP server starts.
+  `database_integrity` check. During initialization, `/status.json` is available with
+  `phase: initializing`, elapsed seconds and readiness false. `/health` and
+  `/ready` return 503 until database validation finishes, preserving the startup
+  probe budget. After validation, readiness still waits for collector initialization
+  and renderer readiness. Use a pod port-forward to inspect status while Kubernetes keeps
+  the pod out of ready Service endpoints.
 - `retention` covers `retention_delete`, `source_cleanup` and
   `retention_checkpoint`. Deletion progress counts committed expired events.
 - `replay_build` covers stopping the old renderer, reclaiming its generation,
