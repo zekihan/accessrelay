@@ -45,6 +45,7 @@ func TestLegacyDatabaseDigestAndRollbackCompatibility(t *testing.T) {
 	}))
 	defer server.Close()
 	c := config.Default()
+	c.Database.MmapBytes = 64 << 20
 	c.StateDir = filepath.Join(root, "state")
 	c.RuntimeDir = filepath.Join(root, "runtime")
 	c.ConnectionFile = filepath.Join(root, "connection.json")
@@ -71,6 +72,10 @@ settings=json.loads(sys.argv[5]);client=m.Client(settings,sys.argv[3]);db=m.Stor
 	}
 	s := coll.Store
 	defer s.Close()
+	var mmapBytes int64
+	if err := s.DB.QueryRow(`PRAGMA mmap_size`).Scan(&mmapBytes); err != nil || mmapBytes != c.Database.MmapBytes {
+		t.Fatalf("mapped reads not configured: mmap_size=%d err=%v", mmapBytes, err)
+	}
 	var bound config.Source
 	if err := s.Get("source_identity", &bound); err != nil || bound != c.Collection.Source {
 		t.Fatalf("legacy source adoption failed: %v", err)

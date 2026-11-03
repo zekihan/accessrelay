@@ -35,9 +35,20 @@ type Store struct {
 	Path string
 }
 
-func Open(dir string) (s *Store, err error) {
+type Options struct {
+	MmapBytes int64
+}
+
+func Open(dir string) (*Store, error) {
+	return OpenWithOptions(dir, Options{})
+}
+
+func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	opening := telemetry.Start("database_open")
 	defer func() { opening.Finish(err == nil) }()
+	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 {
+		return nil, errors.New("configuration_database")
+	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return nil, errors.New("state_storage")
 	}
@@ -61,6 +72,7 @@ func Open(dir string) (s *Store, err error) {
 	dsn.RawQuery = url.Values{"_pragma": {
 		"foreign_keys(ON)", "journal_mode(WAL)", "synchronous(FULL)",
 		"busy_timeout(5000)", "journal_size_limit(8388608)",
+		fmt.Sprintf("mmap_size(%d)", options.MmapBytes),
 	}}.Encode()
 	s.DB, err = sql.Open("sqlite", dsn.String())
 	if err != nil {

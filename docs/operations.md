@@ -121,6 +121,26 @@ Status exposes opaque reason codes and contains no backend credentials.
 
 ## retention and sizing
 
+SQLite memory-mapped reads are opt-in with `database.mmapBytes` (Helm:
+`config.database.mmapBytes`). The default `0` disables mapping, including when
+the setting is omitted. Values from `0` through `2147483648` are accepted;
+SQLite may clamp the requested limit to its compiled maximum. The current
+Linux build supports `2147418112` bytes, the value used for copy-based testing.
+Only the beginning of the database up to that limit is eligible for mapped
+reads; pages beyond it use ordinary reads. The mapping does not reserve that
+amount of RAM, but resident mapped pages consume memory within the container's
+limit alongside the collector, renderer and filesystem cache.
+
+Mapping can speed up integrity checks and replay on high-latency storage, but
+can also amplify physical reads or regress performance. Test startup, retention
+rollover and memory usage with an isolated database copy under the intended
+resource limits before enabling it. WAL, full synchronous writes, integrity
+validation and the database schema are unchanged. A mapped I/O error can
+terminate the process instead of returning a recoverable SQLite error; see
+[SQLite's memory-mapped I/O documentation](https://sqlite.org/mmap.html).
+Set the value back to `0` and restart to disable mapping; no database conversion
+is required.
+
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
 removed in transactions of at most 1,000 events. Each committed batch updates

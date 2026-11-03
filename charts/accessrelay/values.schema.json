@@ -36,6 +36,17 @@
         "goaccessBinary": {
           "const": "goaccess"
         },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mmapBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483648
+            }
+          }
+        },
         "collection": {
           "type": "object",
           "additionalProperties": false,

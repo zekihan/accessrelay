@@ -79,6 +79,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="accessrelay-fixture-") as temporary:
             root = Path(temporary)
             config = json.loads((ROOT / "examples/config.json").read_text())
+            config["database"] = {"mmapBytes": 2147418112}
             config["report"].update(historyDays=1, jobs=2, configOverrides={"http-method": "true", "http-protocol": "true", "anonymize-ip": "no"})
             config["collection"].update(pollInterval="1s", ingestionDelay="1s", backfillWindow="1h", reconciliationInterval="1s", staleAfter="1s")
             config["limits"]["diagnosticBytes"] = 128

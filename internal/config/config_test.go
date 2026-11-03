@@ -1,11 +1,43 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLoadDatabaseMapping(t *testing.T) {
+	for _, tc := range []struct {
+		name, setting, wantError string
+		wantBytes                int64
+	}{
+		{name: "omitted"},
+		{name: "disabled", setting: `,"database":{"mmapBytes":0}`},
+		{name: "enabled", setting: `,"database":{"mmapBytes":67108864}`, wantBytes: 64 << 20},
+		{name: "maximum", setting: `,"database":{"mmapBytes":2147483648}`, wantBytes: 2 << 30},
+		{name: "negative", setting: `,"database":{"mmapBytes":-1}`, wantError: "configuration_database"},
+		{name: "too large", setting: `,"database":{"mmapBytes":2147483649}`, wantError: "configuration_database"},
+		{name: "unknown option", setting: `,"database":{"cacheBytes":67108864}`, wantError: "configuration_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+			} else if err != nil || c.Database.MmapBytes != tc.wantBytes {
+				t.Fatalf("mmapBytes=%d err=%v, want %d", c.Database.MmapBytes, err, tc.wantBytes)
+			}
+		})
+	}
+}
 
 func TestValidation(t *testing.T) {
 	c := Default()

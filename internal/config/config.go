@@ -47,12 +47,16 @@ type Limits struct {
 	DiagnosticBytes  int64  `json:"diagnosticBytes"`
 	ReserveBytes     uint64 `json:"reserveBytes"`
 }
+type Database struct {
+	MmapBytes int64 `json:"mmapBytes"`
+}
 type Config struct {
 	Listen         string     `json:"listen"`
 	StateDir       string     `json:"stateDir"`
 	RuntimeDir     string     `json:"runtimeDir"`
 	ConnectionFile string     `json:"connectionFile"`
 	GoAccessBinary string     `json:"goaccessBinary"`
+	Database       Database   `json:"database"`
 	Collection     Collection `json:"collection"`
 	Report         Report     `json:"report"`
 	Limits         Limits     `json:"limits"`
@@ -95,6 +99,9 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 {
+		return errors.New("configuration_database")
+	}
 	for _, s := range []string{c.Collection.PollInterval, c.Collection.IngestionDelay, c.Collection.Overlap, c.Collection.ReconciliationInterval, c.Collection.BackfillWindow, c.Collection.MinimumWindow, c.Collection.QueryTimeout, c.Collection.StaleAfter} {
 		d, err := time.ParseDuration(s)
 		if !positiveDuration.MatchString(s) || err != nil || d > 24*time.Hour {

@@ -82,7 +82,7 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 	if os.MkdirAll(filepath.Join(c.RuntimeDir, "generations"), 0700) != nil {
 		return nil, errors.New("runtime_storage")
 	}
-	s, err := store.Open(c.StateDir)
+	s, err := store.OpenWithOptions(c.StateDir, store.Options{MmapBytes: c.Database.MmapBytes})
 	if err != nil {
 		return nil, err
 	}

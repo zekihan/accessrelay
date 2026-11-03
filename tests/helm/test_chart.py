@@ -57,6 +57,19 @@ class ChartTests(unittest.TestCase):
             binary = os.environ.get("ACCESSRELAY_BINARY", ROOT / "dist/accessrelay")
             subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
         self.assertNotIn("url", json.loads(config))
+        self.assertEqual(json.loads(config)["database"]["mmapBytes"], 0)
+
+    def test_mapped_reads_opt_in(self):
+        objects = render("--set", "config.database.mmapBytes=2147418112")
+        config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][
+            "accessrelay.json"
+        ]
+        self.assertEqual(json.loads(config)["database"]["mmapBytes"], 2147418112)
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            f.write(config)
+            f.flush()
+            binary = os.environ.get("ACCESSRELAY_BINARY", ROOT / "dist/accessrelay")
+            subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
 
     def test_existing_pvc_ingress_and_checksum(self):
         a = render()
@@ -109,6 +122,8 @@ class ChartTests(unittest.TestCase):
             "config.report.configOverrides.restore=true",
             "config.collection.pollInterval=0s",
             "config.stateDir=/other",
+            "config.database.mmapBytes=-1",
+            "config.database.mmapBytes=2147483649",
             "terminationGracePeriodSeconds=5",
         ]:
             with (
