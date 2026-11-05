@@ -175,3 +175,5 @@ browser mappings and fixtures retain Apache-2.0 attribution. Bundled GoAccess is
 MIT licensed and runs as a separate executable. See [NOTICE](NOTICE), [LICENSE](LICENSE)
 and [LICENSES](LICENSES). The image includes the pinned GoAccess source archive
 and license; the report links to accessrelay's source repository.
+
+Publishing and manual recovery: [Publishing](docs/publishing.md).
