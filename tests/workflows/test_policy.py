@@ -78,6 +78,9 @@ jobs:
         for path in (ROOT / ".github/workflows").glob("*.y*ml"):
             for line in path.read_text().splitlines():
                 if "uses:" in line and "@" in line:
+                    if "zekihan/release-workflows/" in line:
+                        self.assertRegex(line, r"@[0-9a-f]{40} # main$")
+                        continue
                     self.assertRegex(line, r"@[0-9a-f]{40} # v[0-9]+[.][0-9]+[.][0-9]+$")
 
     def test_repository(self):

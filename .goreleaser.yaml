@@ -25,5 +25,3 @@ release:
     owner: zekihan
     name: accessrelay
   ids: [all]
-  extra_files:
-    - glob: release-assets/accessrelay-*.tgz
