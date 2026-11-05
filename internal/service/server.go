@@ -181,6 +181,13 @@ func serveReport(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	defer func() { _ = f.Close() }()
+	serveReportFile(w, r, f)
+}
+
+func serveReportFile(w http.ResponseWriter, r *http.Request, f interface {
+	io.ReadSeeker
+	Stat() (os.FileInfo, error)
+}) {
 	info, err := f.Stat()
 	if err != nil {
 		http.Error(w, "report_unavailable", http.StatusServiceUnavailable)
