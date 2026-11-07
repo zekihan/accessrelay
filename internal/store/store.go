@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, digest BLOB UNIQUE NOT NULL, time_ns INTEGER NOT NULL,
  source_id INTEGER REFERENCES sources(id), message TEXT NOT NULL, occurrences INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS events_time ON events(time_ns);
+CREATE INDEX IF NOT EXISTS events_source ON events(source_id);
 CREATE TABLE IF NOT EXISTS changes (
  seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,copies INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS changes_event ON changes(event_id);`

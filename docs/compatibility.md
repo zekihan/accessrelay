@@ -28,6 +28,12 @@ reopen the result with Python for rollback. Unknown SQLite schema versions,
 missing/changed columns, extra application tables and failed integrity checks
 are rejected. This release does not rewrite the schema or require a migration.
 
+New stores also create `events_source` on `events(source_id)`, matching the index
+previously added to the live store by a one-off maintenance script. Creation uses
+`IF NOT EXISTS` and runs only when the store is empty. Opening an existing store
+never builds a missing index, so a large table cannot delay startup behind the
+writer lock and liveness probes.
+
 VictoriaLogs must implement the documented exclusive `end` parameter and honor
 `options(allow_partial_response=false)`. See
 [query semantics](https://docs.victoriametrics.com/victorialogs/querying/) and
