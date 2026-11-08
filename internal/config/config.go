@@ -51,6 +51,9 @@ type Database struct {
 	MmapBytes int64 `json:"mmapBytes"`
 	// IntegrityCheck is "startup" (default) or "background".
 	IntegrityCheck string `json:"integrityCheck"`
+	// ReplayPrefetch is the number of concurrent readers that warm the page
+	// cache ahead of a full replay export; zero disables it.
+	ReplayPrefetch int `json:"replayPrefetch"`
 }
 
 func (d Database) BackgroundIntegrity() bool { return d.IntegrityCheck == "background" }
@@ -104,7 +107,7 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
-	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 {
+	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 || c.Database.ReplayPrefetch < 0 || c.Database.ReplayPrefetch > 64 {
 		return errors.New("configuration_database")
 	}
 	switch c.Database.IntegrityCheck {

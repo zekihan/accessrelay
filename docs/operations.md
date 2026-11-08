@@ -157,6 +157,17 @@ collector stops with `database_integrity` and the process exits, exactly as a
 failed startup check would. The default `startup` keeps the blocking check.
 No database conversion is involved in switching between the two.
 
+The full replay that rebuilds the report reads every event in time order.
+Retention and reconciliation leave those rows scattered across the database
+file, so on high-latency storage the replay is dominated by one small random
+read at a time. `database.replayPrefetch` (Helm:
+`config.database.replayPrefetch`) sets a number of query-only readers, `0`
+through `64`, that read upcoming time ranges concurrently a bounded distance
+ahead of the replay to warm the page cache. Their results are discarded; the
+replay still reads every row itself in one snapshot, so its output is
+unchanged. The cache they fill counts towards the container's memory limit but
+is reclaimable. The default `0` disables prefetching.
+
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
 removed in transactions of at most 1,000 events. Each committed batch updates

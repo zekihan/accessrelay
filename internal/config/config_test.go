@@ -67,6 +67,35 @@ func TestLoadDatabaseMapping(t *testing.T) {
 	}
 }
 
+func TestLoadReplayStartup(t *testing.T) {
+	for _, tc := range []struct {
+		name, setting, wantError string
+		readers                  int
+	}{
+		{name: "omitted"},
+		{name: "prefetch", setting: `,"database":{"replayPrefetch":16}`, readers: 16},
+		{name: "prefetch maximum", setting: `,"database":{"replayPrefetch":64}`, readers: 64},
+		{name: "prefetch negative", setting: `,"database":{"replayPrefetch":-1}`, wantError: "configuration_database"},
+		{name: "prefetch too large", setting: `,"database":{"replayPrefetch":65}`, wantError: "configuration_database"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+			} else if err != nil || c.Database.ReplayPrefetch != tc.readers {
+				t.Fatalf("readers=%d err=%v", c.Database.ReplayPrefetch, err)
+			}
+		})
+	}
+}
+
 func TestValidation(t *testing.T) {
 	c := Default()
 	c.Collection.Source.Cluster = "fixture"

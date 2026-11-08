@@ -42,6 +42,9 @@ type Options struct {
 	// DeferIntegrity skips the blocking quick_check during Open. The caller
 	// must run Verify before relying on the database being intact.
 	DeferIntegrity bool
+	// ReplayPrefetch is the number of query-only readers that warm the page
+	// cache ahead of a full replay export. Zero disables prefetching.
+	ReplayPrefetch int
 }
 
 func Open(dir string) (*Store, error) {
@@ -51,7 +54,7 @@ func Open(dir string) (*Store, error) {
 func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	opening := telemetry.Start("database_open")
 	defer func() { opening.Finish(err == nil) }()
-	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 {
+	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 || options.ReplayPrefetch < 0 || options.ReplayPrefetch > 64 {
 		return nil, errors.New("configuration_database")
 	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
@@ -365,10 +368,13 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 		return 0, storageError(ctx, "export_database")
 	}
 	var rows *sql.Rows
+	var prefetch *replayPrefetch
 	if full {
-		rows, err = tx.QueryContext(ctx, `SELECT message,occurrences FROM events ORDER BY time_ns,id`)
+		prefetch = s.startReplayPrefetch(ctx, s.options.ReplayPrefetch)
+		defer prefetch.stop()
+		rows, err = tx.QueryContext(ctx, `SELECT message,occurrences,time_ns FROM events ORDER BY time_ns,id`)
 	} else {
-		rows, err = tx.QueryContext(ctx, `SELECT e.message,c.copies FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`, after)
+		rows, err = tx.QueryContext(ctx, `SELECT e.message,c.copies,0 FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`, after)
 	}
 	if err != nil {
 		return 0, storageError(ctx, "export_database")
@@ -377,10 +383,11 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 	buffer := bufio.NewWriterSize(output, 256*1024)
 	for rows.Next() {
 		var message string
-		var copies int64
-		if rows.Scan(&message, &copies) != nil || copies < 1 {
+		var copies, timeNS int64
+		if rows.Scan(&message, &copies, &timeNS) != nil || copies < 1 {
 			return 0, storageError(ctx, "export_database")
 		}
+		prefetch.advance(timeNS)
 		line := message + "\n"
 		if copies > (maxBytes-written)/int64(len(line)) {
 			return 0, errors.New("replay_limit")
