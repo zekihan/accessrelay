@@ -71,6 +71,8 @@ type Collector struct {
 	reconcileTurn                bool
 	forwardTurn                  bool
 	lastLoop                     time.Time
+	verifying                    bool
+	verified                     chan error
 	mu                           sync.RWMutex
 	status                       Status
 }
@@ -82,7 +84,7 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 	if os.MkdirAll(filepath.Join(c.RuntimeDir, "generations"), 0700) != nil {
 		return nil, errors.New("runtime_storage")
 	}
-	s, err := store.OpenWithOptions(c.StateDir, store.Options{MmapBytes: c.Database.MmapBytes})
+	s, err := store.OpenWithOptions(c.StateDir, store.Options{MmapBytes: c.Database.MmapBytes, DeferIntegrity: c.Database.BackgroundIntegrity()})
 	if err != nil {
 		return nil, err
 	}
@@ -612,13 +614,48 @@ func (c *Collector) runReconcileWindow(ctx context.Context, now time.Time, size 
 	}
 	return nil
 }
+
+// verifyInBackground starts the deferred integrity check once, after the first
+// replay attempt, so it does not compete with the startup export for storage.
+func (c *Collector) verifyInBackground(ctx context.Context) {
+	if !c.Config.Database.BackgroundIntegrity() || c.verified != nil {
+		return
+	}
+	c.verified = make(chan error, 1)
+	c.verifying = true
+	go func() { c.verified <- c.Store.Verify(ctx) }()
+}
+
+// integrityResult reports a completed background check without blocking.
+func (c *Collector) integrityResult() error {
+	if !c.verifying {
+		return nil
+	}
+	select {
+	case err := <-c.verified:
+		c.verifying = false
+		return err
+	default:
+		return nil
+	}
+}
+
 func (c *Collector) Run(ctx context.Context) error {
+	verifyCtx, stopVerify := context.WithCancel(ctx)
+	defer stopVerify()
 	backoff := time.Second
+	var fatal error
 	for ctx.Err() == nil {
 		c.mu.Lock()
 		c.lastLoop = time.Now()
 		c.mu.Unlock()
 		immediate, err := c.Tick(ctx, time.Now())
+		c.verifyInBackground(verifyCtx)
+		if e := c.integrityResult(); e != nil && ctx.Err() == nil {
+			c.failure = "database_integrity"
+			fatal = errors.New("database_integrity")
+			break
+		}
 		wait := time.Second
 		if err != nil {
 			if ctx.Err() != nil {
@@ -651,10 +688,20 @@ func (c *Collector) Run(ctx context.Context) error {
 			}
 		}
 	}
+	stopVerify()
+	if c.verifying {
+		if err := <-c.verified; err != nil && ctx.Err() == nil && fatal == nil {
+			fatal = errors.New("database_integrity")
+		}
+		c.verifying = false
+	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	stopErr := c.Consumer.Stop(shutdown)
 	closeErr := c.Store.Close()
+	if fatal != nil {
+		return fatal
+	}
 	if stopErr != nil {
 		return errors.New("renderer_shutdown")
 	}

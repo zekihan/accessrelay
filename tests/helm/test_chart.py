@@ -58,6 +58,7 @@ class ChartTests(unittest.TestCase):
             subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
         self.assertNotIn("url", json.loads(config))
         self.assertEqual(json.loads(config)["database"]["mmapBytes"], 0)
+        self.assertEqual(json.loads(config)["database"]["integrityCheck"], "startup")
 
     def test_mapped_reads_opt_in(self):
         objects = render("--set", "config.database.mmapBytes=2147418112")
@@ -65,6 +66,18 @@ class ChartTests(unittest.TestCase):
             "accessrelay.json"
         ]
         self.assertEqual(json.loads(config)["database"]["mmapBytes"], 2147418112)
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            f.write(config)
+            f.flush()
+            binary = os.environ.get("ACCESSRELAY_BINARY", ROOT / "dist/accessrelay")
+            subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
+
+    def test_background_integrity_opt_in(self):
+        objects = render("--set", "config.database.integrityCheck=background")
+        config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][
+            "accessrelay.json"
+        ]
+        self.assertEqual(json.loads(config)["database"]["integrityCheck"], "background")
         with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
             f.write(config)
             f.flush()
@@ -124,6 +137,7 @@ class ChartTests(unittest.TestCase):
             "config.stateDir=/other",
             "config.database.mmapBytes=-1",
             "config.database.mmapBytes=2147483649",
+            "config.database.integrityCheck=never",
             "terminationGracePeriodSeconds=5",
         ]:
             with (

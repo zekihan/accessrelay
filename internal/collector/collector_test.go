@@ -732,3 +732,66 @@ func TestReplayProgressKeepsCollectorHealthy(t *testing.T) {
 	}
 	f.counts(t, 1, 2001)
 }
+
+func TestBackgroundIntegrityFailureStopsCollector(t *testing.T) {
+	f := newFixture(t)
+	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.000000001Z", "pod-a")}
+	f.window(t)
+	var root, pageSize int64
+	if err := f.c.Store.DB.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name='events_time'`).Scan(&root); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Store.DB.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := os.OpenFile(filepath.Join(f.config.StateDir, "events.sqlite"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.WriteAt([]byte{0}, (root-1)*pageSize); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if _, err := New(f.config, f.client, &consumer{}); err == nil || err.Error() != "database_integrity" {
+		t.Fatalf("startup check: got %v, want database_integrity", err)
+	}
+	c := f.config
+	c.Database.IntegrityCheck = "background"
+	collector, err := New(c, f.client, &consumer{})
+	if err != nil {
+		t.Fatal("deferred open:", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := collector.Run(ctx); err == nil || err.Error() != "database_integrity" {
+		t.Fatalf("run: got %v, want database_integrity", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("integrity failure did not stop the collector")
+	}
+	if collector.Store.DB.Ping() == nil {
+		t.Fatal("database remained open after integrity failure")
+	}
+}
+
+func TestBackgroundIntegritySuccessKeepsCollecting(t *testing.T) {
+	f := newFixture(t)
+	_ = f.c.Store.Close()
+	c := f.config
+	c.Database.IntegrityCheck = "background"
+	collector, err := New(c, f.client, &consumer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := collector.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if collector.verifying {
+		t.Fatal("background check still running after shutdown")
+	}
+}

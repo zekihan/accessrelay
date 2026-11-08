@@ -49,7 +49,12 @@ type Limits struct {
 }
 type Database struct {
 	MmapBytes int64 `json:"mmapBytes"`
+	// IntegrityCheck is "startup" (default) or "background".
+	IntegrityCheck string `json:"integrityCheck"`
 }
+
+func (d Database) BackgroundIntegrity() bool { return d.IntegrityCheck == "background" }
+
 type Config struct {
 	Listen         string     `json:"listen"`
 	StateDir       string     `json:"stateDir"`
@@ -100,6 +105,11 @@ func Load(path string) (Config, error) {
 }
 func (c Config) Validate() error {
 	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 {
+		return errors.New("configuration_database")
+	}
+	switch c.Database.IntegrityCheck {
+	case "", "startup", "background":
+	default:
 		return errors.New("configuration_database")
 	}
 	for _, s := range []string{c.Collection.PollInterval, c.Collection.IngestionDelay, c.Collection.Overlap, c.Collection.ReconciliationInterval, c.Collection.BackfillWindow, c.Collection.MinimumWindow, c.Collection.QueryTimeout, c.Collection.StaleAfter} {

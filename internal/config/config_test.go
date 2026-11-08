@@ -8,6 +8,34 @@ import (
 	"testing"
 )
 
+func TestLoadDatabaseIntegrityCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, setting, wantError string
+		background               bool
+	}{
+		{name: "omitted"},
+		{name: "startup", setting: `,"database":{"integrityCheck":"startup"}`},
+		{name: "background", setting: `,"database":{"integrityCheck":"background"}`, background: true},
+		{name: "unknown", setting: `,"database":{"integrityCheck":"never"}`, wantError: "configuration_database"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+			} else if err != nil || c.Database.BackgroundIntegrity() != tc.background {
+				t.Fatalf("background=%v err=%v, want %v", c.Database.BackgroundIntegrity(), err, tc.background)
+			}
+		})
+	}
+}
+
 func TestLoadDatabaseMapping(t *testing.T) {
 	for _, tc := range []struct {
 		name, setting, wantError string

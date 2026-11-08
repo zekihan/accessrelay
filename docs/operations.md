@@ -146,6 +146,17 @@ terminate the process instead of returning a recoverable SQLite error; see
 Set the value back to `0` and restart to disable mapping; no database conversion
 is required.
 
+Startup runs SQLite `PRAGMA quick_check` before retention, replay and report
+rendering. On high-latency storage this check reads most of the database with
+small random reads and can dominate restart time. Setting
+`database.integrityCheck` (Helm: `config.database.integrityCheck`) to
+`background` runs the same check on a separate query-only connection after the
+first replay build instead, so the report becomes ready without waiting for it.
+Collection and rendering proceed while the check runs; if it fails, the
+collector stops with `database_integrity` and the process exits, exactly as a
+failed startup check would. The default `startup` keeps the blocking check.
+No database conversion is involved in switching between the two.
+
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
 removed in transactions of at most 1,000 events. Each committed batch updates
