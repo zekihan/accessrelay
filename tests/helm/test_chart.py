@@ -60,6 +60,7 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(json.loads(config)["database"]["mmapBytes"], 0)
         self.assertEqual(json.loads(config)["database"]["integrityCheck"], "startup")
         self.assertEqual(json.loads(config)["database"]["replayPrefetch"], 0)
+        self.assertFalse(json.loads(config)["report"]["streamReplay"])
 
     def test_mapped_reads_opt_in(self):
         objects = render("--set", "config.database.mmapBytes=2147418112")
@@ -86,11 +87,17 @@ class ChartTests(unittest.TestCase):
             subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
 
     def test_replay_startup_opt_in(self):
-        objects = render("--set", "config.database.replayPrefetch=16")
+        objects = render(
+            "--set",
+            "config.database.replayPrefetch=16",
+            "--set",
+            "config.report.streamReplay=true",
+        )
         config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][
             "accessrelay.json"
         ]
         self.assertEqual(json.loads(config)["database"]["replayPrefetch"], 16)
+        self.assertTrue(json.loads(config)["report"]["streamReplay"])
         with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
             f.write(config)
             f.flush()

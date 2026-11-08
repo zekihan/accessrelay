@@ -38,6 +38,9 @@ type Report struct {
 	WebsocketURL    string            `json:"websocketURL"`
 	ConfigOverrides map[string]string `json:"configOverrides"`
 	ExtraBrowsers   []string          `json:"extraBrowsers"`
+	// StreamReplay starts GoAccess while a full replay is still being written,
+	// suspending it whenever it gets close to the written length.
+	StreamReplay bool `json:"streamReplay"`
 }
 type Limits struct {
 	MaxRuntimeBytes  int64  `json:"maxRuntimeBytes"`

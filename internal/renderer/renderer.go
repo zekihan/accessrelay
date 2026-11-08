@@ -42,6 +42,8 @@ type Renderer struct {
 	initTimeout    time.Duration
 	initialization *telemetry.Phase
 	diagnostics    []*diagnosticCapture
+	feed           *Feed
+	throttle       *throttle
 }
 
 func New(c config.Config) (*Renderer, error) {
@@ -106,6 +108,29 @@ func (r *Renderer) Start(ctx context.Context, generation string) error {
 		return err
 	}
 	return r.startLocked(ctx, generation)
+}
+
+// StartFeed starts GoAccess on a replay that is still being written. GoAccess
+// stays suspended near the written length until feed is closed, so its initial
+// snapshot covers the whole replay. A stop before Close discards the snapshot.
+func (r *Renderer) StartFeed(ctx context.Context, generation string, feed *Feed) error {
+	if !feedSupported {
+		return errors.New("renderer_feed")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.stopLocked(ctx); err != nil {
+		return err
+	}
+	if err := r.startLocked(ctx, generation); err != nil {
+		return err
+	}
+	r.feed = feed
+	r.throttle = startThrottle(r.cmd.Process, r.done, filepath.Join(r.Config.RuntimeDir, "generations", generation, "access.log"), feed)
+	return nil
 }
 
 func (r *Renderer) startLocked(ctx context.Context, generation string) error {
@@ -233,6 +258,11 @@ func (r *Renderer) failedLocked(reason string) {
 }
 func (r *Renderer) stopLocked(ctx context.Context) error {
 	r.initialization.Finish(false)
+	// Resume a suspended child so it can handle the interrupt.
+	r.throttle.stop()
+	r.throttle = nil
+	_, complete := r.feedClosed()
+	r.feed = nil
 	if r.cmd == nil {
 		if r.stopDiagnosticsLocked() != nil {
 			return errors.New("renderer_diagnostic_storage")
@@ -259,8 +289,9 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 		}
 	}
 	diagnosticErr := r.stopDiagnosticsLocked()
-	// GoAccess writes its last HTML snapshot on graceful exit.
-	if data, err := completeFile(r.output, r.Config.Limits.MaxReportBytes); err == nil {
+	// GoAccess writes its last HTML snapshot on graceful exit. A child stopped
+	// before its streamed replay was complete has only seen part of it.
+	if data, err := completeFile(r.output, r.Config.Limits.MaxReportBytes); err == nil && complete {
 		_ = atomicFile(r.ReportPath(), annotate(data))
 	}
 	r.cmd = nil
@@ -366,7 +397,12 @@ func (r *Renderer) tick() {
 	default:
 	}
 	if !r.status.Ready {
-		if time.Since(r.startedAt) >= r.initTimeout {
+		// A streamed replay's initialization deadline starts once it is complete.
+		started, complete := r.feedClosed()
+		if !complete {
+			return
+		}
+		if time.Since(started) >= r.initTimeout {
 			_ = r.stopLocked(context.Background())
 			r.failedLocked("renderer_unready")
 			return
@@ -401,6 +437,20 @@ func (r *Renderer) tick() {
 		}
 	}
 }
+
+// feedClosed reports when the current child's replay became complete. Without
+// a feed, the replay was complete when the child started.
+func (r *Renderer) feedClosed() (time.Time, bool) {
+	if r.feed == nil {
+		return r.startedAt, true
+	}
+	at, ok := r.feed.closed()
+	if ok && at.Before(r.startedAt) {
+		at = r.startedAt
+	}
+	return at, ok
+}
+
 func completeFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {

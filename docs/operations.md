@@ -168,6 +168,20 @@ replay still reads every row itself in one snapshot, so its output is
 unchanged. The cache they fill counts towards the container's memory limit but
 is reclaimable. The default `0` disables prefetching.
 
+`report.streamReplay` (Helm: `config.report.streamReplay`) starts GoAccess
+while the full replay is still being written instead of after it, so the
+export and GoAccess's initial parse overlap. GoAccess ends its initial parse at
+the first end of file and never rewrites that snapshot, so the collector reads
+GoAccess's offset in the replay from `/proc/<pid>/fdinfo` and suspends it with
+`SIGSTOP` whenever it is within 64 MiB of the written length, resuming it with
+`SIGCONT`. GoAccess reads past that point only after the replay is complete
+and synced. If its offset cannot be observed, it stays suspended until then.
+The replay path, GoAccess arguments and report contents are unchanged, the
+renderer's initialization timeout starts only once the replay is complete, and
+a report from a GoAccess stopped before then is never published. Streaming
+requires Linux; elsewhere, or if GoAccess cannot be started early, it starts
+after the replay as usual. The default `false` keeps the sequential start.
+
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
 removed in transactions of at most 1,000 events. Each committed batch updates

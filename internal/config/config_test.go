@@ -71,12 +71,14 @@ func TestLoadReplayStartup(t *testing.T) {
 	for _, tc := range []struct {
 		name, setting, wantError string
 		readers                  int
+		stream                   bool
 	}{
 		{name: "omitted"},
 		{name: "prefetch", setting: `,"database":{"replayPrefetch":16}`, readers: 16},
 		{name: "prefetch maximum", setting: `,"database":{"replayPrefetch":64}`, readers: 64},
 		{name: "prefetch negative", setting: `,"database":{"replayPrefetch":-1}`, wantError: "configuration_database"},
 		{name: "prefetch too large", setting: `,"database":{"replayPrefetch":65}`, wantError: "configuration_database"},
+		{name: "stream", setting: `,"report":{"historyDays":7,"jobs":6,"chunkSize":8192,"websocketURL":"ws://localhost:8080/ws","streamReplay":true}`, stream: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
@@ -89,8 +91,8 @@ func TestLoadReplayStartup(t *testing.T) {
 				if err == nil || err.Error() != tc.wantError {
 					t.Fatalf("got %v, want %s", err, tc.wantError)
 				}
-			} else if err != nil || c.Database.ReplayPrefetch != tc.readers {
-				t.Fatalf("readers=%d err=%v", c.Database.ReplayPrefetch, err)
+			} else if err != nil || c.Database.ReplayPrefetch != tc.readers || c.Report.StreamReplay != tc.stream {
+				t.Fatalf("readers=%d stream=%v err=%v", c.Database.ReplayPrefetch, c.Report.StreamReplay, err)
 			}
 		})
 	}

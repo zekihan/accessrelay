@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,6 +35,40 @@ type Consumer interface {
 	Generation() string
 	Snapshot() renderer.Snapshot
 }
+
+// FeedConsumer can start consuming a replay before it is complete.
+type FeedConsumer interface {
+	StartFeed(context.Context, string, *renderer.Feed) error
+}
+
+// replayFeedMargin is how far behind the written length a streamed renderer
+// must stay; streaming starts once twice this much has been written.
+var replayFeedMargin int64 = 64 << 20
+
+// feedWriter counts replay bytes as they reach the file and starts a streamed
+// consumer once enough of the replay is ahead of it.
+type feedWriter struct {
+	file    *os.File
+	feed    *renderer.Feed
+	start   func() error
+	started bool
+	failed  bool
+}
+
+func (w *feedWriter) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	w.feed.Advance(int64(n))
+	if err == nil && !w.started && !w.failed && w.feed.Written() >= 2*w.feed.Margin {
+		// A failed streamed start falls back to starting after the replay.
+		if w.start() == nil {
+			w.started = true
+		} else {
+			w.failed = true
+		}
+	}
+	return n, err
+}
+
 type Status struct {
 	Heartbeat                    float64     `json:"heartbeat"`
 	Initialized                  bool        `json:"initialized"`
@@ -338,8 +373,13 @@ func (c *Collector) rotate(ctx context.Context) (err error) {
 		return errors.New("export_storage")
 	}
 	completed := false
+	var streamed *feedWriter
 	defer func() {
 		if !completed {
+			// A streaming consumer must release the generation before removal.
+			if streamed != nil && streamed.started {
+				_ = c.Consumer.Stop(ctx)
+			}
 			_ = os.RemoveAll(dir)
 		}
 	}()
@@ -347,7 +387,13 @@ func (c *Collector) rotate(ctx context.Context) (err error) {
 	if err != nil {
 		return errors.New("export_storage")
 	}
-	seq, err := c.Store.Export(ctx, f, 0, true, c.Config.Limits.MaxReplayBytes, c.progress)
+	var output io.Writer = f
+	if consumer, ok := c.Consumer.(FeedConsumer); ok && c.Config.Report.StreamReplay {
+		feed := renderer.NewFeed(replayFeedMargin)
+		streamed = &feedWriter{file: f, feed: feed, start: func() error { return consumer.StartFeed(ctx, generation, feed) }}
+		output = streamed
+	}
+	seq, err := c.Store.Export(ctx, output, 0, true, c.Config.Limits.MaxReplayBytes, c.progress)
 	if err != nil {
 		_ = f.Close()
 		return err
@@ -362,7 +408,9 @@ func (c *Collector) rotate(ctx context.Context) (err error) {
 	if f.Close() != nil {
 		return errors.New("export_close")
 	}
-	if err = c.Consumer.Start(ctx, generation); err != nil {
+	if streamed != nil && streamed.started {
+		streamed.feed.Close()
+	} else if err = c.Consumer.Start(ctx, generation); err != nil {
 		return err
 	}
 	c.Generation = generation

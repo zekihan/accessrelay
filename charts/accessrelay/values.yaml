@@ -96,6 +96,7 @@ config:
       "historyDays": 7,
       "jobs": 6,
       "chunkSize": 8192,
+      "streamReplay": false,
       "websocketURL": "ws://localhost:8080/ws",
       "configOverrides": {},
       "extraBrowsers": []
