@@ -31,13 +31,17 @@ CREATE TABLE IF NOT EXISTS changes (
 CREATE INDEX IF NOT EXISTS changes_event ON changes(event_id);`
 
 type Store struct {
-	DB   *sql.DB
-	lock *os.File
-	Path string
+	DB      *sql.DB
+	lock    *os.File
+	Path    string
+	options Options
 }
 
 type Options struct {
 	MmapBytes int64
+	// DeferIntegrity skips the blocking quick_check during Open. The caller
+	// must run Verify before relying on the database being intact.
+	DeferIntegrity bool
 }
 
 func Open(dir string) (*Store, error) {
@@ -61,7 +65,7 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 		_ = lock.Close()
 		return nil, errors.New("writer_in_use")
 	}
-	s = &Store{lock: lock, Path: filepath.Join(dir, "events.sqlite")}
+	s = &Store{lock: lock, Path: filepath.Join(dir, "events.sqlite"), options: options}
 	defer func() {
 		if err != nil {
 			_ = s.Close()
@@ -122,14 +126,44 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 			return s, errors.New("database_format")
 		}
 	}
-	var quick string
-	integrity := telemetry.Start("database_integrity")
-	err = s.DB.QueryRow(`PRAGMA quick_check`).Scan(&quick)
-	integrity.Finish(err == nil && quick == "ok")
-	if err != nil || quick != "ok" {
-		return s, errors.New("database_integrity")
+	if options.DeferIntegrity {
+		return s, nil
+	}
+	if err = quickCheck(context.Background(), s.DB); err != nil {
+		return s, err
 	}
 	return s, nil
+}
+
+func quickCheck(ctx context.Context, db *sql.DB) (err error) {
+	integrity := telemetry.Start("database_integrity")
+	defer func() { integrity.Finish(err == nil) }()
+	var quick string
+	if e := db.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&quick); e != nil {
+		return storageError(ctx, "database_integrity")
+	}
+	if quick != "ok" {
+		return errors.New("database_integrity")
+	}
+	return nil
+}
+
+// Verify runs quick_check on a separate query-only connection so the writer
+// connection stays available. WAL readers see one committed snapshot and do
+// not block the writer.
+func (s *Store) Verify(ctx context.Context) error {
+	dsn := url.URL{Scheme: "file", Path: s.Path}
+	dsn.RawQuery = url.Values{"_pragma": {
+		"query_only(ON)", "busy_timeout(5000)",
+		fmt.Sprintf("mmap_size(%d)", s.options.MmapBytes),
+	}}.Encode()
+	db, err := sql.Open("sqlite", dsn.String())
+	if err != nil {
+		return errors.New("database_integrity")
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	return quickCheck(ctx, db)
 }
 func (s *Store) Close() error {
 	var err error
