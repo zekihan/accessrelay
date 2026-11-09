@@ -282,11 +282,20 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 
 const pruneBatchSize = 1000
 
+// pruneAutocheckpoint lets the WAL grow to about 64 MiB during retention so a
+// checkpoint writes each page dirtied by several batches once instead of once
+// per batch. The default of 1000 pages is restored afterwards.
+const pruneAutocheckpoint = 16384
+
 func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (removed int64, err error) {
 	retention := telemetry.Start("retention")
 	defer func() { retention.Finish(err == nil) }()
 	deletion := telemetry.Start("retention_delete")
 	defer func() { deletion.Finish(err == nil) }()
+	if _, err = s.DB.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", pruneAutocheckpoint)); err != nil {
+		return 0, storageError(ctx, "database_transaction")
+	}
+	defer func() { _, _ = s.DB.Exec(`PRAGMA wal_autocheckpoint=1000`) }()
 	for {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {

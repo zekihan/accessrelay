@@ -184,7 +184,10 @@ after the replay as usual. The default `false` keeps the sequential start.
 
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
-removed in transactions of at most 1,000 events. Each committed batch updates
+removed in transactions of at most 1,000 events. During retention the WAL may
+grow to about 64 MiB before an automatic checkpoint, so index pages touched by
+several batches are written back once; the WAL is truncated when retention
+finishes. Each committed batch updates
 the collector heartbeat, so a large daily cleanup can make progress without
 failing liveness. Full and incremental replays also report progress every 1,000 written lines.
 Shutdown cancels retention and replay SQL; committed batches remain

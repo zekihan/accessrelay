@@ -124,3 +124,24 @@ func TestExportCancellationLeavesAuthoritativeStateUnchanged(t *testing.T) {
 		t.Fatalf("events=%d copies=%d err=%v", events, copies, err)
 	}
 }
+
+func TestPruneWidensAutocheckpointOnlyDuringRetention(t *testing.T) {
+	s := retentionFixture(t)
+	autocheckpoint := func() int {
+		var pages int
+		if err := s.DB.QueryRow(`PRAGMA wal_autocheckpoint`).Scan(&pages); err != nil {
+			t.Fatal(err)
+		}
+		return pages
+	}
+	if _, err := s.Prune(context.Background(), 100, func() {
+		if got := autocheckpoint(); got != pruneAutocheckpoint {
+			t.Fatalf("wal_autocheckpoint=%d during retention, want %d", got, pruneAutocheckpoint)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := autocheckpoint(); got != 1000 {
+		t.Fatalf("wal_autocheckpoint=%d after retention, want 1000", got)
+	}
+}
