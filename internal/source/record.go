@@ -14,6 +14,25 @@ import (
 	"unicode/utf8"
 )
 
+// Traefik's common log format ends with the request count, the quoted router
+// and service names and the duration.
+var routerTail = regexp.MustCompile(` \d+ "([^"\s\\]+)" "[^"\\]*" \d+ms$`)
+
+// Router returns the Traefik router name of an access log line.
+func Router(message string) (string, bool) {
+	m := routerTail.FindStringSubmatch(message)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// Excluded reports whether message was served by one of routers.
+func Excluded(message string, routers map[string]bool) bool {
+	router, ok := Router(message)
+	return ok && routers[router]
+}
+
 var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
 var clf = regexp.MustCompile(`^\S+ - \S+ \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `)
 

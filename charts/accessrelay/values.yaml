@@ -90,7 +90,8 @@ config:
       "queryTimeout": "20s",
       "staleAfter": "2m",
       "maxLineBytes": 1048576,
-      "maxWindowBytes": 268435456
+      "maxWindowBytes": 268435456,
+      "excludeRouters": []
     },
     "report": {
       "historyDays": 7,

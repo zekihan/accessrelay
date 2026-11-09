@@ -77,6 +77,14 @@ backfill, and periodic reconciliation across retention for older late arrivals.
 Reconciliation does not advance the collection cursor. Operational messages are
 skipped using the inherited CLF shape check. CLF-shaped parsing failures remain
 in the replay and GoAccess's failed-request counts and diagnostic files.
+`collection.excludeRouters` (Helm: `config.collection.excludeRouters`) lists
+exact Traefik router names, read from the router field near the end of each
+access log line, whose requests are neither stored nor reported; use it for
+machine traffic such as log shipping. When the list gains a router, the next
+start deletes that router's stored events in batches of 1,000 before the
+replay; the applied list is kept in the database, so later starts skip the
+scan. Removing a router lets collection fetch its requests again where the
+backend still retains them.
 Connection files are reopened before every query, including split queries and
 Kubernetes projected-secret replacements. Backend errors are opaque codes;
 credentials never enter logs, status, metrics or process arguments.

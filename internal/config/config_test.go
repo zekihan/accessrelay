@@ -216,3 +216,41 @@ func TestLoadConfigurationSizeBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadExcludeRouters(t *testing.T) {
+	long := strings.Repeat("r", 257)
+	many := strings.TrimSuffix(strings.Repeat(`"r",`, 65), ",")
+	for _, tc := range []struct {
+		name, routers, wantError string
+		want                     int
+	}{
+		{name: "omitted"},
+		{name: "one", routers: `["traefik-mtls-journald-upload-fcc44d81276fc53b472d@kubernetescrd"]`, want: 1},
+		{name: "empty name", routers: `[""]`, wantError: "configuration_exclusion"},
+		{name: "space", routers: `["a b"]`, wantError: "configuration_exclusion"},
+		{name: "quote", routers: `["a\"b"]`, wantError: "configuration_exclusion"},
+		{name: "duplicate", routers: `["a","a"]`, wantError: "configuration_exclusion"},
+		{name: "too long", routers: `["` + long + `"]`, wantError: "configuration_exclusion"},
+		{name: "too many", routers: `[` + many + `]`, wantError: "configuration_exclusion"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setting := ""
+			if tc.routers != "" {
+				setting = `,"excludeRouters":` + tc.routers
+			}
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}%s}}`, setting)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+			} else if err != nil || len(c.Collection.ExcludeRouters) != tc.want {
+				t.Fatalf("routers=%v err=%v", c.Collection.ExcludeRouters, err)
+			}
+		})
+	}
+}

@@ -99,12 +99,26 @@ class ChartTests(unittest.TestCase):
         ]
         self.assertEqual(json.loads(config)["database"]["replayPrefetch"], 16)
         self.assertTrue(json.loads(config)["report"]["streamReplay"])
+
     def test_normal_synchronous_opt_in(self):
         objects = render("--set", "config.database.synchronous=normal")
         config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][
             "accessrelay.json"
         ]
         self.assertEqual(json.loads(config)["database"]["synchronous"], "normal")
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            f.write(config)
+            f.flush()
+            binary = os.environ.get("ACCESSRELAY_BINARY", ROOT / "dist/accessrelay")
+            subprocess.run([str(binary), "--config", f.name, "--validate"], check=True)
+
+    def test_excluded_routers_opt_in(self):
+        router = "traefik-mtls-journald-upload-fcc44d81276fc53b472d@kubernetescrd"
+        objects = render("--set-json", f'config.collection.excludeRouters=["{router}"]')
+        config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][
+            "accessrelay.json"
+        ]
+        self.assertEqual(json.loads(config)["collection"]["excludeRouters"], [router])
         with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
             f.write(config)
             f.flush()
@@ -175,6 +189,12 @@ class ChartTests(unittest.TestCase):
                 self.assertRaises(subprocess.CalledProcessError),
             ):
                 render("--set", flag)
+        for value in ['[""]', '["a b"]', '["a\\"b"]', '["a","a"]']:
+            with (
+                self.subTest(excludeRouters=value),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                render("--set-json", f"config.collection.excludeRouters={value}")
 
 
 if __name__ == "__main__":

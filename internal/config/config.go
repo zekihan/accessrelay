@@ -30,6 +30,9 @@ type Collection struct {
 	StaleAfter             string `json:"staleAfter"`
 	MaxLineBytes           int    `json:"maxLineBytes"`
 	MaxWindowBytes         int64  `json:"maxWindowBytes"`
+	// ExcludeRouters lists Traefik router names whose requests are neither
+	// stored nor reported. Already stored events are purged once.
+	ExcludeRouters []string `json:"excludeRouters"`
 }
 type Report struct {
 	HistoryDays     int               `json:"historyDays"`
@@ -141,6 +144,16 @@ func (c Config) Validate() error {
 		if s == "" || strings.ContainsAny(s, "\r\n\x00") {
 			return errors.New("configuration_source")
 		}
+	}
+	if len(c.Collection.ExcludeRouters) > 64 {
+		return errors.New("configuration_exclusion")
+	}
+	excluded := map[string]bool{}
+	for _, r := range c.Collection.ExcludeRouters {
+		if r == "" || len(r) > 256 || excluded[r] || strings.ContainsAny(r, "\" \t\r\n\x00\\") {
+			return errors.New("configuration_exclusion")
+		}
+		excluded[r] = true
 	}
 	for _, s := range []string{c.StateDir, c.RuntimeDir, c.ConnectionFile} {
 		if !filepath.IsAbs(s) || strings.ContainsAny(s, "\r\n\x00") {

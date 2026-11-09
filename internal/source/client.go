@@ -30,6 +30,7 @@ func queryError(reason string, split bool) error { return &QueryError{reason, sp
 type Result struct {
 	Path        string
 	Operational int64
+	Excluded    int64
 	Bytes       int64
 }
 type Client struct {
@@ -127,6 +128,10 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, errors.New("stage_storage")
 	}
 	defer func() { _ = statement.Close() }()
+	excluded := map[string]bool{}
+	for _, r := range c.Config.Collection.ExcludeRouters {
+		excluded[r] = true
+	}
 	reader := bufio.NewReaderSize(response.Body, c.Config.Collection.MaxLineBytes+1)
 	for {
 		line, readErr := reader.ReadSlice('\n')
@@ -146,6 +151,10 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		}
 		if operational {
 			result.Operational++
+			continue
+		}
+		if Excluded(record.Message, excluded) {
+			result.Excluded++
 			continue
 		}
 		if _, e = statement.ExecContext(ctx, record.Digest[:], record.TimeNS, record.Source, record.Message); e != nil {

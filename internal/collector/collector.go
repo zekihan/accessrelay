@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,7 @@ type Collector struct {
 	exported                     int64
 	dirty                        bool
 	cutoff                       int64
+	exclusionApplied             bool
 	nextPoll, timeReconcile      time.Time
 	reconcileStart, reconcileEnd int64
 	failure                      string
@@ -566,9 +568,43 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 	}
 	return c.Cleanup()
 }
+
+// applyExclusion removes stored events of newly excluded routers. The applied
+// list is recorded so later starts skip the full scan until it changes.
+func (c *Collector) applyExclusion(ctx context.Context) error {
+	routers := slices.Sorted(slices.Values(c.Config.Collection.ExcludeRouters))
+	var applied []string
+	if err := c.Store.Get("excluded_routers", &applied); err != nil {
+		return err
+	}
+	if slices.Equal(applied, routers) {
+		return nil
+	}
+	added := map[string]bool{}
+	for _, r := range routers {
+		if !slices.Contains(applied, r) {
+			added[r] = true
+		}
+	}
+	if len(added) == 0 {
+		return c.Store.Put("excluded_routers", routers)
+	}
+	removed, err := c.Store.PurgeEvents(ctx, func(message string) bool { return source.Excluded(message, added) }, "excluded_routers", routers, c.progress)
+	if removed > 0 {
+		c.dirty = true
+	}
+	return err
+}
+
 func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 	cutoff := HistoryStart(now, c.Config.Report.HistoryDays)
 	target := now.Add(-config.Duration(c.Config.Collection.IngestionDelay)).UnixNano()
+	if !c.exclusionApplied {
+		if err := c.applyExclusion(ctx); err != nil {
+			return false, err
+		}
+		c.exclusionApplied = true
+	}
 	if c.cutoff != cutoff {
 		c.dirty = true
 		if _, err := c.Store.Prune(ctx, cutoff, c.progress); err != nil {
