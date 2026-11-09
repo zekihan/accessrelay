@@ -45,6 +45,9 @@ type Options struct {
 	// ReplayPrefetch is the number of query-only readers that warm the page
 	// cache ahead of a full replay export. Zero disables prefetching.
 	ReplayPrefetch int
+	// Synchronous is "full" (default) or "normal". In WAL mode NORMAL keeps
+	// commits atomic but may lose the most recent ones on power loss.
+	Synchronous string
 }
 
 func Open(dir string) (*Store, error) {
@@ -55,6 +58,14 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	opening := telemetry.Start("database_open")
 	defer func() { opening.Finish(err == nil) }()
 	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 || options.ReplayPrefetch < 0 || options.ReplayPrefetch > 64 {
+		return nil, errors.New("configuration_database")
+	}
+	synchronous := "FULL"
+	switch options.Synchronous {
+	case "", "full":
+	case "normal":
+		synchronous = "NORMAL"
+	default:
 		return nil, errors.New("configuration_database")
 	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
@@ -78,7 +89,7 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	// interrupted query). Connection-local settings must follow every open.
 	dsn := url.URL{Scheme: "file", Path: s.Path}
 	dsn.RawQuery = url.Values{"_pragma": {
-		"foreign_keys(ON)", "journal_mode(WAL)", "synchronous(FULL)",
+		"foreign_keys(ON)", "journal_mode(WAL)", "synchronous(" + synchronous + ")",
 		"busy_timeout(5000)", "journal_size_limit(8388608)",
 		fmt.Sprintf("mmap_size(%d)", options.MmapBytes),
 	}}.Encode()

@@ -74,7 +74,7 @@ config:
     "runtimeDir": "/runtime",
     "connectionFile": "/connection/connection.json",
     "goaccessBinary": "goaccess",
-    "database": {"mmapBytes": 0, "integrityCheck": "startup", "replayPrefetch": 0},
+    "database": {"mmapBytes": 0, "integrityCheck": "startup", "replayPrefetch": 0, "synchronous": "full"},
     "collection": {
       "source": {
         "cluster": "example",

@@ -57,6 +57,8 @@ type Database struct {
 	// ReplayPrefetch is the number of concurrent readers that warm the page
 	// cache ahead of a full replay export; zero disables it.
 	ReplayPrefetch int `json:"replayPrefetch"`
+	// Synchronous is "full" (default) or "normal".
+	Synchronous string `json:"synchronous"`
 }
 
 func (d Database) BackgroundIntegrity() bool { return d.IntegrityCheck == "background" }
@@ -115,6 +117,11 @@ func (c Config) Validate() error {
 	}
 	switch c.Database.IntegrityCheck {
 	case "", "startup", "background":
+	default:
+		return errors.New("configuration_database")
+	}
+	switch c.Database.Synchronous {
+	case "", "full", "normal":
 	default:
 		return errors.New("configuration_database")
 	}

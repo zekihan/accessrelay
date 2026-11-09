@@ -36,6 +36,32 @@ func TestLoadDatabaseIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestLoadDatabaseSynchronous(t *testing.T) {
+	for _, tc := range []struct{ name, setting, want, wantError string }{
+		{name: "omitted"},
+		{name: "full", setting: `,"database":{"synchronous":"full"}`, want: "full"},
+		{name: "normal", setting: `,"database":{"synchronous":"normal"}`, want: "normal"},
+		{name: "off", setting: `,"database":{"synchronous":"off"}`, wantError: "configuration_database"},
+		{name: "uppercase", setting: `,"database":{"synchronous":"NORMAL"}`, wantError: "configuration_database"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+			} else if err != nil || c.Database.Synchronous != tc.want {
+				t.Fatalf("synchronous=%q err=%v, want %q", c.Database.Synchronous, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadDatabaseMapping(t *testing.T) {
 	for _, tc := range []struct {
 		name, setting, wantError string

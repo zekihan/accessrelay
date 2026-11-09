@@ -61,6 +61,50 @@ func testReplacementConnection(t *testing.T, mmapBytes int64) {
 	}
 }
 
+func TestSynchronousSurvivesReplacementConnection(t *testing.T) {
+	for _, tc := range []struct {
+		setting string
+		want    int64
+	}{{"", 2}, {"full", 2}, {"normal", 1}} {
+		t.Run(tc.setting, func(t *testing.T) {
+			s, err := OpenWithOptions(filepath.Join(t.TempDir(), "state"), Options{Synchronous: tc.setting})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			conn, err := s.DB.Conn(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			_ = conn.Close()
+			var mode string
+			var got int64
+			if err := s.DB.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
+				t.Fatalf("journal_mode=%q err=%v", mode, err)
+			}
+			if err := s.DB.QueryRow(`PRAGMA synchronous`).Scan(&got); err != nil || got != tc.want {
+				t.Fatalf("synchronous=%d err=%v, want %d", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidSynchronousDoesNotCreateState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	s, err := OpenWithOptions(path, Options{Synchronous: "off"})
+	if s != nil {
+		s.Close()
+		t.Fatal("invalid synchronous opened a store")
+	}
+	if err == nil || err.Error() != "configuration_database" {
+		t.Fatalf("got %v, want configuration_database", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid synchronous created state: %v", err)
+	}
+}
+
 func TestInvalidMappingDoesNotCreateState(t *testing.T) {
 	for _, mmapBytes := range []int64{-1, 2<<30 + 1} {
 		path := filepath.Join(t.TempDir(), "state")

@@ -119,7 +119,7 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 	if os.MkdirAll(filepath.Join(c.RuntimeDir, "generations"), 0700) != nil {
 		return nil, errors.New("runtime_storage")
 	}
-	s, err := store.OpenWithOptions(c.StateDir, store.Options{MmapBytes: c.Database.MmapBytes, DeferIntegrity: c.Database.BackgroundIntegrity(), ReplayPrefetch: c.Database.ReplayPrefetch})
+	s, err := store.OpenWithOptions(c.StateDir, store.Options{MmapBytes: c.Database.MmapBytes, DeferIntegrity: c.Database.BackgroundIntegrity(), ReplayPrefetch: c.Database.ReplayPrefetch, Synchronous: c.Database.Synchronous})
 	if err != nil {
 		return nil, err
 	}

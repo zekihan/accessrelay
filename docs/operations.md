@@ -139,7 +139,7 @@ limit alongside the collector, renderer and filesystem cache.
 Mapping can speed up integrity checks and replay on high-latency storage, but
 can also amplify physical reads or regress performance. Test startup, retention
 rollover and memory usage with an isolated database copy under the intended
-resource limits before enabling it. WAL, full synchronous writes, integrity
+resource limits before enabling it. WAL, the synchronous level, integrity
 validation and the database schema are unchanged. A mapped I/O error can
 terminate the process instead of returning a recoverable SQLite error; see
 [SQLite's memory-mapped I/O documentation](https://sqlite.org/mmap.html).
@@ -181,6 +181,17 @@ renderer's initialization timeout starts only once the replay is complete, and
 a report from a GoAccess stopped before then is never published. Streaming
 requires Linux; elsewhere, or if GoAccess cannot be started early, it starts
 after the replay as usual. The default `false` keeps the sequential start.
+
+The writer always uses WAL. `database.synchronous` (Helm:
+`config.database.synchronous`) selects SQLite's `synchronous` level: the
+default `full` syncs the WAL on every commit, `normal` syncs only at
+checkpoints. With `normal`, each commit stays atomic and the database cannot
+be corrupted, but a power or node failure can discard the most recent commits.
+Window data and the cursor commit together, so a discarded window is fetched
+again after restart instead of leaving a gap, and the report is rebuilt from
+the database on every start. A process crash alone loses nothing. On
+replicated storage `normal` removes one network round trip per commit and
+shortens daily retention. No database conversion is involved in switching.
 
 Set local and backend retention together. Local pruning occurs at UTC day
 rollover even during an outage. Expired events and their change records are
