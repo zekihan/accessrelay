@@ -4,10 +4,11 @@ ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /accessrelay ./cmd/accessrelay
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /accessrelay ./cmd/accessrelay
 ADD --checksum=sha256:3aef5f6d5061decc6fc4946339b3a61b170bd256f80b4e861194b095df83ec86 https://tar.goaccess.io/goaccess-1.12.tar.gz /goaccess-source.tar.gz
 RUN tar -xOf /goaccess-source.tar.gz goaccess-1.12/COPYING > /GoAccess-MIT.txt
 
