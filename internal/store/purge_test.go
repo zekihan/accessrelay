@@ -57,7 +57,7 @@ func TestPurgeEventsCancellationLeavesMarkerUnset(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err = s.PurgeEvents(ctx, func(string) bool { return true }, "excluded_routers", []string{"r"}, nil); err == nil {
-		t.Fatal("cancelled purge succeeded")
+		t.Fatal("canceled purge succeeded")
 	}
 	var marker []string
 	if err = s.Get("excluded_routers", &marker); err != nil || marker != nil {

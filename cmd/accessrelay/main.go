@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -78,7 +79,7 @@ func run() error {
 		cancel()
 	case result = <-serving:
 		cancel()
-		if result == http.ErrServerClosed {
+		if errors.Is(result, http.ErrServerClosed) {
 			result = nil
 		}
 	case <-ctx.Done():

@@ -143,7 +143,7 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 			if readErr == io.EOF && len(line) == 0 {
 				break
 			}
-			return result, queryError("incomplete_response", readErr != bufio.ErrBufferFull)
+			return result, queryError("incomplete_response", !errors.Is(readErr, bufio.ErrBufferFull))
 		}
 		record, operational, e := Decode(line, start, end)
 		if e != nil {

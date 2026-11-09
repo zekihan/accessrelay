@@ -272,7 +272,7 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 		var raw string
 		var cursor int64
 		e = tx.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='cursor'").Scan(&raw)
-		if e != nil && e != sql.ErrNoRows {
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
 			return errors.New("database_metadata")
 		}
 		if e == nil && json.Unmarshal([]byte(raw), &cursor) != nil {

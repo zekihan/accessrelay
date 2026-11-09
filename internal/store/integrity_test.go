@@ -84,7 +84,7 @@ func TestVerifyRunsAlongsideWriter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := s.Verify(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled verify: got %v", err)
+		t.Fatalf("canceled verify: got %v", err)
 	}
 	if _, err := s.DB.Exec(`INSERT INTO metadata VALUES('k','1')`); err != nil {
 		t.Fatal("writer after verify:", err)

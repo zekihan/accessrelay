@@ -172,7 +172,7 @@ func bindSourceIdentity(db *sql.DB, configured config.Source) error {
 	defer func() { _ = tx.Rollback() }()
 	var raw string
 	err = tx.QueryRow(`SELECT value FROM metadata WHERE key='source_identity'`).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		encoded, marshalErr := json.Marshal(want)
 		if marshalErr != nil {
 			return errors.New("database_metadata")
@@ -240,8 +240,8 @@ func (c *Collector) Refresh(now time.Time) error {
 	if unix.Statfs(c.Config.StateDir, &disk) != nil {
 		return errors.New("storage_read")
 	}
-	free := uint64(disk.Bavail) * uint64(disk.Bsize)
-	total := uint64(disk.Blocks) * uint64(disk.Bsize)
+	free := disk.Bavail * uint64(disk.Bsize)
+	total := disk.Blocks * uint64(disk.Bsize)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := &c.status
@@ -304,7 +304,7 @@ func (c *Collector) checkStorage() error {
 		if unix.Statfs(dir, &st) != nil {
 			return errors.New("storage_read")
 		}
-		if uint64(st.Bavail)*uint64(st.Bsize) < c.Config.Limits.ReserveBytes {
+		if st.Bavail*uint64(st.Bsize) < c.Config.Limits.ReserveBytes {
 			return errors.New("storage_reserve")
 		}
 	}
