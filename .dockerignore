@@ -6,3 +6,13 @@ tmp
 work
 tests
 charts
+.github
+.vscode
+*.swp
+.env.*
+*.pem
+*.key
+docs
+examples
+scripts
+release-assets
