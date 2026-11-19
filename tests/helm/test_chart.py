@@ -12,9 +12,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "charts/accessrelay"
 
 
-def render(*args):
+def render(*args, release="goaccess"):
     result = subprocess.run(
-        ["helm", "template", "goaccess", str(CHART), "-n", "goaccess", *args],
+        ["helm", "template", release, str(CHART), "-n", "goaccess", *args],
         check=True,
         capture_output=True,
         text=True,
@@ -62,6 +62,37 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(json.loads(config)["database"]["replayPrefetch"], 0)
         self.assertFalse(json.loads(config)["report"]["streamReplay"])
         self.assertEqual(json.loads(config)["database"]["synchronous"], "full")
+
+    def test_release_names_and_labels_render_as_strings(self):
+        objects = render(
+            "--set-string",
+            "nameOverride=off,storage.existingClaim=off,connectionSecret=on,"
+            "authService.name=false,authService.externalName=on",
+            "--set",
+            "ingress.enabled=true,authService.enabled=true",
+            release="true",
+        )
+        auth = next(
+            x for x in objects if x["kind"] == "Service" and x["spec"]["type"] == "ExternalName"
+        )
+        workload = {x["kind"]: x for x in objects if x is not auth}
+        for kind in ["Deployment", "Service", "Ingress", "NetworkPolicy"]:
+            with self.subTest(kind=kind):
+                self.assertEqual(workload[kind]["metadata"]["name"], "true")
+        expected = {"app.kubernetes.io/name": "off", "app.kubernetes.io/instance": "true"}
+        deployment = workload["Deployment"]["spec"]
+        self.assertEqual(deployment["selector"]["matchLabels"], expected)
+        self.assertEqual(deployment["template"]["metadata"]["labels"], expected)
+        self.assertEqual(workload["Service"]["spec"]["selector"], expected)
+        pod_selector = workload["NetworkPolicy"]["spec"]["podSelector"]
+        self.assertEqual(pod_selector["matchLabels"], expected)
+        ingress_path = workload["Ingress"]["spec"]["rules"][0]["http"]["paths"][0]
+        self.assertEqual(ingress_path["backend"]["service"]["name"], "true")
+        self.assertEqual(auth["metadata"]["name"], "false")
+        self.assertEqual(auth["spec"]["externalName"], "on")
+        volumes = {v["name"]: v for v in deployment["template"]["spec"]["volumes"]}
+        self.assertEqual(volumes["state"]["persistentVolumeClaim"]["claimName"], "off")
+        self.assertEqual(volumes["connection"]["secret"]["secretName"], "on")
 
     def test_mapped_reads_opt_in(self):
         objects = render("--set", "config.database.mmapBytes=2147418112")
