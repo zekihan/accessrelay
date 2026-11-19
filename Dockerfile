@@ -10,7 +10,8 @@ COPY internal ./internal
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /accessrelay ./cmd/accessrelay
 ADD --checksum=sha256:3aef5f6d5061decc6fc4946339b3a61b170bd256f80b4e861194b095df83ec86 https://tar.goaccess.io/goaccess-1.12.tar.gz /goaccess-source.tar.gz
-RUN tar -xOf /goaccess-source.tar.gz goaccess-1.12/COPYING > /GoAccess-MIT.txt
+RUN chmod 0644 /goaccess-source.tar.gz && \
+    tar -xOf /goaccess-source.tar.gz goaccess-1.12/COPYING > /GoAccess-MIT.txt
 
 FROM docker.io/allinurl/goaccess:1.12@sha256:9e6dfd4abce94bd7c2907c1840b7b35f666587d56b24ffbb930b4782a87ea172
 COPY --from=build /accessrelay /accessrelay
