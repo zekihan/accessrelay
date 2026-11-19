@@ -63,6 +63,11 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureWithRuntimeDir(t, "runtime")
+}
+
+func newFixtureWithRuntimeDir(t *testing.T, runtimeDir string) *fixture {
+	t.Helper()
 	f := &fixture{r: &consumer{}, now: time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC)}
 	f.backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -80,7 +85,7 @@ func newFixture(t *testing.T) *fixture {
 	root := t.TempDir()
 	c := config.Default()
 	c.StateDir = filepath.Join(root, "state")
-	c.RuntimeDir = filepath.Join(root, "runtime")
+	c.RuntimeDir = filepath.Join(root, runtimeDir)
 	c.ConnectionFile = filepath.Join(root, "connection.json")
 	c.Collection.Source.Cluster = "fixture"
 	c.Collection.ReconciliationInterval = "1s"
@@ -122,6 +127,27 @@ func (f *fixture) replay(t *testing.T) string {
 	}
 	return string(data)
 }
+
+func TestWindowWithQueryDelimiterInRuntimePath(t *testing.T) {
+	f := newFixtureWithRuntimeDir(t, "runtime?stage")
+	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.123456789Z", "a")}
+	f.rows = append(f.rows, f.rows[0])
+
+	f.window(t)
+	f.counts(t, 1, 2)
+	var cursor int64
+	wantCursor := time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC).UnixNano()
+	if err := f.c.Store.Get("cursor", &cursor); err != nil || cursor != wantCursor {
+		t.Fatalf("cursor = %d, %v; want %d", cursor, err, wantCursor)
+	}
+	if replay := f.replay(t); replay != line+"\n"+line+"\n" {
+		t.Fatalf("replay = %q", replay)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.config.RuntimeDir), "runtime")); !os.IsNotExist(err) {
+		t.Fatalf("SQLite created a file outside the staging directory: %v", err)
+	}
+}
+
 func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 	f := newFixture(t)
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.123456789Z", "a"), f.row("2026-10-01T00:01:00.123456789Z", "a"), f.row("2026-10-01T00:01:00.123456789Z", "b"), f.row("2026-10-01T00:01:00.123456788Z", "a")}

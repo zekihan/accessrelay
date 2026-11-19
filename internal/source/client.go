@@ -109,7 +109,8 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 			_ = os.Remove(result.Path)
 		}
 	}()
-	db, e := sql.Open("sqlite", filepath.ToSlash(result.Path))
+	stageURL := url.URL{Scheme: "file", Path: filepath.ToSlash(result.Path)}
+	db, e := sql.Open("sqlite", stageURL.String())
 	if e != nil {
 		return result, errors.New("stage_storage")
 	}
