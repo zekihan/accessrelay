@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,8 +64,8 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 	}
 	query := "options(allow_partial_response=false)"
 	for _, field := range [][2]string{{"cluster", c.Config.Collection.Source.Cluster}, {"kubernetes.namespace_name", c.Config.Collection.Source.Namespace}, {"kubernetes.container_name", c.Config.Collection.Source.Container}} {
-		v, _ := CanonicalJSON(field[1])
-		query += " " + field[0] + ":=" + v
+		// LogsQL expects Go string literals, including for supplementary Unicode.
+		query += " " + field[0] + ":=" + strconv.Quote(field[1])
 	}
 	query += " | fields _time, _stream_id, kubernetes.pod_id, kubernetes.docker_id, _msg"
 	params := url.Values{"query": {query}, "start": {Timestamp(start)}, "end": {Timestamp(end)}, "timeout": {c.Config.Collection.QueryTimeout}, "allow_partial_response": {"0"}}

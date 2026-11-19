@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -45,6 +46,48 @@ func TestPrecisionCanonicalIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchQuotesLogsQLSourceFilters(t *testing.T) {
+	c := config.Default()
+	c.Collection.Source.Cluster = `edge😀 "regional" \west`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.FormValue("query")
+		filter, ok := strings.CutPrefix(query, "options(allow_partial_response=false) cluster:=")
+		if !ok {
+			t.Errorf("missing cluster filter in %q", query)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// VictoriaLogs parses double-quoted LogsQL tokens with strconv.
+		token, err := strconv.QuotedPrefix(filter)
+		if err == nil {
+			var cluster string
+			cluster, err = strconv.Unquote(token)
+			if err == nil && cluster != c.Collection.Source.Cluster {
+				t.Errorf("cluster filter = %q, want %q", cluster, c.Collection.Source.Cluster)
+			}
+		}
+		if err != nil {
+			t.Errorf("invalid LogsQL filter %q: %v", filter, err)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer backend.Close()
+
+	c.RuntimeDir = t.TempDir()
+	c.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
+	connection, _ := json.Marshal(map[string]string{"url": backend.URL})
+	if err := os.WriteFile(c.ConnectionFile, connection, 0600); err != nil {
+		t.Fatal(err)
+	}
+	client := New(c)
+	defer client.Close()
+	start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
+	if _, err := client.Fetch(context.Background(), start, start+1); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	root := t.TempDir()
 	start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
