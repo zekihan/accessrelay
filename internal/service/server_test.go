@@ -89,6 +89,41 @@ func TestHandlerRoutes(t *testing.T) {
 	}
 }
 
+func TestReportServesSameSecondReplacement(t *testing.T) {
+	c, r := serviceFixture(t)
+	h := Handler(c, r)
+	const original = "<html>old</html>"
+	const replacement = "<html>new</html>"
+	modTime := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	writeSnapshot := func(path, body string, modified time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := r.ReportPath()
+	writeSnapshot(path, original, modTime)
+	if w := request(h, "/"); w.Code != http.StatusOK || w.Body.String() != original {
+		t.Fatalf("original report: %d %q", w.Code, w.Body.String())
+	}
+	next := path + ".next"
+	writeSnapshot(next, replacement, modTime.Add(500*time.Millisecond))
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("If-Modified-Since", modTime.Format(http.TimeFormat))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || w.Body.String() != replacement || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("replacement report: %d %v %q", w.Code, w.Header(), w.Body.String())
+	}
+}
+
 func TestStatusAndMetrics(t *testing.T) {
 	c, r := serviceFixture(t)
 	h := Handler(c, r)

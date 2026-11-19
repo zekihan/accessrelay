@@ -147,6 +147,36 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestLoadReportWebsocketAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, url string
+		valid     bool
+	}{
+		{"default port", "wss://report.example/ws", true},
+		{"explicit IPv6 port", "ws://[2001:db8::1]:65535/ws", true},
+		{"missing host", "wss://:443/ws", false},
+		{"empty port", "wss://report.example:/ws", false},
+		{"zero port", "wss://report.example:0/ws", false},
+		{"port above range", "wss://report.example:65536/ws", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}},"report":{"websocketURL":%q}}`, tc.url)
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if tc.valid {
+				if err != nil || cfg.Report.WebsocketURL != tc.url {
+					t.Fatalf("got %q, %v; want %q", cfg.Report.WebsocketURL, err, tc.url)
+				}
+			} else if err == nil || err.Error() != "configuration_websocket" {
+				t.Fatalf("got %v, want configuration_websocket", err)
+			}
+		})
+	}
+}
+
 func TestGoAccessReportOptionBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
