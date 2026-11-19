@@ -165,11 +165,11 @@
             "jobs": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 64
+              "maximum": 12
             },
             "chunkSize": {
               "type": "integer",
-              "minimum": 1,
+              "minimum": 32,
               "maximum": 1048576
             },
             "streamReplay": {
