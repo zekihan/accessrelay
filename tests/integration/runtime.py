@@ -57,11 +57,18 @@ class Backend(BaseHTTPRequestHandler):
         with self.server.mutex:
             code = self.server.code
             rows = list(self.server.rows)
-            self.server.tokens.append(self.headers.get("Authorization"))
+            token = self.headers.get("Authorization")
+            self.server.tokens.append(token)
+            pause = self.server.pause_app_response and token == "fixture-b"
         body = b"".join(json.dumps(row).encode() + b"\n" for row in rows if start <= datetime.fromisoformat(row["_time"]) < end)
         self.send_response(code)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", "1" if pause else str(len(body)))
         self.end_headers()
+        if pause:
+            self.wfile.flush()
+            self.server.app_response_paused.set()
+            self.server.release_app_response.wait()
+            return
         self.wfile.write(body)
 
 
@@ -72,6 +79,9 @@ class RuntimeTests(unittest.TestCase):
         backend.rows = []
         backend.code = 200
         backend.tokens = []
+        backend.pause_app_response = False
+        backend.app_response_paused = threading.Event()
+        backend.release_app_response = threading.Event()
         thread = threading.Thread(target=backend.serve_forever, daemon=True)
         thread.start()
         names = {key: "accessrelay-test-" + uuid.uuid4().hex[:12] for key in ["app", "web", "goaccess", "collector"]}
@@ -212,12 +222,18 @@ class RuntimeTests(unittest.TestCase):
                     wait(lambda: invalid.exists() and 0 < invalid.stat().st_size <= 128)
                 wait(lambda: len(list((root / "app/runtime/generations").iterdir())) == 1)
                 self.assertLessEqual(len(list((root / "app/state/www").iterdir())), 1)
-                self.assertFalse(list((root / "app/runtime").glob("window-*")))
+                # Hold an incomplete response so shutdown has a stage to clean up.
+                runtime = root / "app/runtime"
+                with backend.mutex:
+                    backend.pause_app_response = True
+                self.assertTrue(backend.app_response_paused.wait(timeout=10), "collector did not start the held response")
+                wait(lambda: list(runtime.glob("window-*.sqlite")), seconds=10)
                 # Graceful termination must reap GoAccess and release the writer lock.
                 before = time.monotonic()
                 docker("stop", "-t", "30", names["app"])
                 self.assertLess(time.monotonic() - before, 25)
                 self.assertEqual(docker("inspect", "--format", "{{.State.ExitCode}}", names["app"]).stdout.strip(), "0")
+                self.assertFalse(list(runtime.glob("window-*")))
                 for diagnostic in ["unknowns.txt", "invalid-requests.log"]:
                     path = root / "app/state/logs" / diagnostic
                     self.assertTrue(path.is_file(), "clean stop must restore a regular diagnostic file")
@@ -230,6 +246,7 @@ class RuntimeTests(unittest.TestCase):
                     print(docker("inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{json .NetworkSettings.Ports}}", name, check=False).stdout)
                 raise
             finally:
+                backend.release_app_response.set()
                 for name in reversed(started):
                     docker("rm", "-f", name, check=False)
                 for kind in ["app", "legacy"]:
