@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "accessrelay.fullname" . }}
+  name: {{ include "accessrelay.fullname" . | quote }}
   labels:
     {{- include "accessrelay.labels" . | nindent 4 }}
 spec:
@@ -85,7 +85,7 @@ spec:
       volumes:
         - name: state
           persistentVolumeClaim:
-            claimName: {{ default (printf "%s-state" (include "accessrelay.fullname" .)) .Values.storage.existingClaim }}
+            claimName: {{ default (printf "%s-state" (include "accessrelay.fullname" .)) .Values.storage.existingClaim | quote }}
         - name: runtime
           emptyDir:
             sizeLimit: {{ .Values.runtimeSizeLimit }}
@@ -97,7 +97,7 @@ spec:
             name: {{ include "accessrelay.fullname" . }}-config
         - name: connection
           secret:
-            secretName: {{ required "connectionSecret is required" .Values.connectionSecret }}
+            secretName: {{ required "connectionSecret is required" .Values.connectionSecret | quote }}
             defaultMode: 0440
       {{- with .Values.nodeSelector }}
       nodeSelector:

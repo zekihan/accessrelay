@@ -5,8 +5,8 @@
 {{- default .Release.Name .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- define "accessrelay.selector" -}}
-app.kubernetes.io/name: {{ include "accessrelay.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/name: {{ include "accessrelay.name" . | quote }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- with .Values.selectorLabels }}
 {{ toYaml . }}
 {{- end }}

@@ -119,3 +119,45 @@ func TestReplayCrossesBufferBoundaryAndChecksCancellation(t *testing.T) {
 		t.Fatalf("limited latest=%d err=%v", latest, err)
 	}
 }
+
+type replayChunks struct{ chunks []string }
+
+func (w *replayChunks) Write(p []byte) (int, error) {
+	w.chunks = append(w.chunks, string(p))
+	return len(p), nil
+}
+
+func TestIncrementalReplayWritesCompleteLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		copies        int
+	}{
+		{"buffer boundary", "later!", 50000},
+		{"oversized line", strings.Repeat("x", 300*1024), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := replayFixture(t)
+			if _, err := s.DB.Exec(`UPDATE events SET message=?, occurrences=? WHERE id=1`, tc.message, tc.copies+1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec(`UPDATE changes SET copies=? WHERE seq=3`, tc.copies); err != nil {
+				t.Fatal(err)
+			}
+			want := "earlier\nearlier\n" + strings.Repeat(tc.message+"\n", tc.copies)
+			var output replayChunks
+			latest, err := s.Export(t.Context(), &output, 1, false, int64(len(want)), nil)
+			if err != nil || latest != 3 {
+				t.Fatalf("latest=%d err=%v", latest, err)
+			}
+			// The live tail can see the file at EOF after any underlying write.
+			for i, chunk := range output.chunks {
+				if !strings.HasSuffix(chunk, "\n") {
+					t.Fatalf("write %d ended with a partial log line", i+1)
+				}
+			}
+			if strings.Join(output.chunks, "") != want {
+				t.Fatal("replay changed log order, content or multiplicity")
+			}
+		})
+	}
+}
