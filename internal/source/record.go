@@ -34,7 +34,11 @@ func Excluded(message string, routers map[string]bool) bool {
 }
 
 var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
-var clf = regexp.MustCompile(`^\S+ - \S+ \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `)
+
+// The inherited Python \S excludes Unicode whitespace and control separators.
+const clfToken = `[^[:space:]\p{Z}\x{85}\x1c-\x1f]+`
+
+var clf = regexp.MustCompile(`^` + clfToken + ` - ` + clfToken + ` \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `)
 
 func Timestamp(ns int64) string {
 	return time.Unix(0, ns).UTC().Format("2006-01-02T15:04:05.000000000Z")

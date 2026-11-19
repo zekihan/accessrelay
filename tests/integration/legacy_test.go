@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,11 @@ func TestLegacyDatabaseDigestAndRollbackCompatibility(t *testing.T) {
 			row["kubernetes.pod_id"] = "pod-b"
 		}
 		rows = append(rows, row)
+	}
+	for _, space := range []string{"\v", "\u001c", "\u0085", "\u00a0", "\u2028"} {
+		rows = append(rows, map[string]string{
+			"_time": now.Format(time.RFC3339Nano), "_stream_id": "fixture", "_msg": strings.Replace(line, " - - [", " - team"+space+"user [", 1),
+		})
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		for _, row := range rows {
@@ -92,7 +98,7 @@ settings=json.loads(sys.argv[5]);client=m.Client(settings,sys.argv[3]);db=m.Stor
 	}
 	a, b, err := s.Counts()
 	if err != nil || a != 2 || b != 4 {
-		t.Fatal("legacy digests changed or multiplicity doubled", a, b, err)
+		t.Fatalf("after Go collection: events=%d copies=%d err=%v, want 2 events and 4 copies", a, b, err)
 	}
 	// The original implementation can reopen the same store and query it after accessrelay stops.
 	_ = s.Close()
