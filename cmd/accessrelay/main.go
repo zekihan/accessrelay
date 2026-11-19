@@ -73,12 +73,11 @@ func run() error {
 	go r.Run(ctx)
 	startup.Activate(service.Handler(coll, r))
 	finished := make(chan error, 1)
-	go func() { finished <- coll.Run(ctx) }()
+	go func(done chan<- error) { done <- coll.Run(ctx) }(finished)
 	var result error
-	collectorFinished := false
 	select {
 	case result = <-finished:
-		collectorFinished = true
+		finished = nil
 		cancel()
 	case result = <-serving:
 		cancel()
@@ -89,20 +88,31 @@ func run() error {
 	}
 	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
 	defer stop()
-	_ = server.Shutdown(shutdown)
-	// The collector owns the database and stops/reaps the renderer before releasing its lock.
-	if collectorFinished {
+	shutdownErr := waitForShutdown(shutdown, server, finished)
+	if result != nil {
 		return result
 	}
-	select {
-	case err = <-finished:
-		if result == nil {
-			result = err
-		}
-	case <-shutdown.Done():
-		if result == nil {
-			result = fmt.Errorf("shutdown_timeout")
+	return shutdownErr
+}
+
+func waitForShutdown(ctx context.Context, server *http.Server, collectorDone <-chan error) error {
+	httpErr := server.Shutdown(ctx)
+	if errors.Is(httpErr, context.DeadlineExceeded) {
+		return errors.New("shutdown_timeout")
+	}
+	// The collector owns the database and stops/reaps the renderer before releasing its lock.
+	if collectorDone != nil {
+		select {
+		case err := <-collectorDone:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return errors.New("shutdown_timeout")
 		}
 	}
-	return result
+	if httpErr != nil {
+		return errors.New("http_shutdown")
+	}
+	return nil
 }
