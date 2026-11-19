@@ -7,4 +7,6 @@ if [ "${ACCESSRELAY_SKIP_BUILD:-false}" != true ]; then
 fi
 docker run --rm --read-only --cap-drop ALL --network none "$image" --version
 docker run --rm --read-only --cap-drop ALL --network none --entrypoint goaccess "$image" --version
+docker run --rm --read-only --cap-drop ALL --network none --entrypoint tar "$image" \
+  -xOzf /usr/share/accessrelay/goaccess/source-1.12.tar.gz goaccess-1.12/COPYING >/dev/null
 ACCESSRELAY_IMAGE="$image" python3 tests/integration/runtime.py
