@@ -298,6 +298,10 @@ const pruneBatchSize = 1000
 // per batch. The default of 1000 pages is restored afterwards.
 const pruneAutocheckpoint = 16384
 
+// Only a definite match keeps a source. A NULL source_id can make IN unknown
+// for an unreferenced source, so test the result explicitly.
+const deleteUnusedSources = `DELETE FROM sources WHERE (id IN (SELECT source_id FROM events)) IS NOT TRUE`
+
 func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (removed int64, err error) {
 	retention := telemetry.Start("retention")
 	defer func() { retention.Finish(err == nil) }()
@@ -338,7 +342,7 @@ func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (remov
 	}
 	deletion.Finish(true)
 	cleanup := telemetry.Start("source_cleanup")
-	_, err = s.DB.ExecContext(ctx, `DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`)
+	_, err = s.DB.ExecContext(ctx, deleteUnusedSources)
 	cleanup.Finish(err == nil)
 	if err != nil {
 		return removed, storageError(ctx, "database_transaction")

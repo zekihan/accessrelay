@@ -13,12 +13,13 @@ func TestPurgeEventsRemovesMatchesWithChangesAndRecordsMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	// More rows than one scan batch, with matches spread across batches.
+	// Matches span scan batches, and the first retained event has no source ID.
 	total := 2*purgeScanBatch + 17
 	if _, err = s.DB.Exec(`INSERT INTO sources(id,identity) VALUES(1,'kept'),(2,'purged');
 		WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?)
 		INSERT INTO events(digest,time_ns,source_id,message,occurrences)
-		SELECT CAST(x AS BLOB),x,CASE WHEN x%3=0 THEN 2 ELSE 1 END,CASE WHEN x%3=0 THEN 'drop' ELSE 'keep' END,2 FROM n;
+		SELECT CAST(x AS BLOB),x,CASE WHEN x=1 THEN NULL WHEN x%3=0 THEN 2 ELSE 1 END,
+		       CASE WHEN x%3=0 THEN 'drop' ELSE 'keep' END,2 FROM n;
 		INSERT INTO changes(event_id,copies) SELECT id,occurrences FROM events`, total); err != nil {
 		t.Fatal(err)
 	}

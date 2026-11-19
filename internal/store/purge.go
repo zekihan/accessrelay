@@ -67,7 +67,7 @@ func (s *Store) PurgeEvents(ctx context.Context, match func(string) bool, key st
 		return removed, storageError(ctx, "database_transaction")
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM events)`); err != nil {
+	if _, err = tx.ExecContext(ctx, deleteUnusedSources); err != nil {
 		return removed, storageError(ctx, "database_transaction")
 	}
 	if err = put(tx, key, value); err != nil {
