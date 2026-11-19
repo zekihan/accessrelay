@@ -416,7 +416,7 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
-			if _, err = buffer.WriteString(line); err != nil {
+			if err = writeReplayLine(buffer, output, line); err != nil {
 				return 0, errors.New("export_write")
 			}
 			written += int64(len(line))
@@ -447,6 +447,26 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 	}
 	return latest, nil
 }
+
+func writeReplayLine(buffer *bufio.Writer, output io.Writer, line string) error {
+	// GoAccess can read to EOF between appends and parse a partial final line.
+	// Flush between records and write a line larger than the buffer in one call.
+	if len(line) > buffer.Available() {
+		if err := buffer.Flush(); err != nil {
+			return err
+		}
+		if len(line) > buffer.Size() {
+			n, err := io.WriteString(output, line)
+			if err == nil && n != len(line) {
+				return io.ErrShortWrite
+			}
+			return err
+		}
+	}
+	_, err := buffer.WriteString(line)
+	return err
+}
+
 func (s *Store) Size() (int64, error) {
 	var n int64
 	for _, suffix := range []string{"", "-wal", "-shm"} {
