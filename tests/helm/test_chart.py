@@ -131,6 +131,16 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(json.loads(config)["database"]["replayPrefetch"], 16)
         self.assertTrue(json.loads(config)["report"]["streamReplay"])
 
+    def test_report_limit_boundaries(self):
+        render("--set", "config.report.jobs=1,config.report.chunkSize=32")
+        render("--set", "config.report.jobs=12,config.report.chunkSize=1048576")
+        for flag in ["config.report.jobs=13", "config.report.chunkSize=31"]:
+            with (
+                self.subTest(flag=flag),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                render("--set", flag)
+
     def test_normal_synchronous_opt_in(self):
         objects = render("--set", "config.database.synchronous=normal")
         config = next(x for x in objects if x["kind"] == "ConfigMap")["data"][

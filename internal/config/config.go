@@ -137,7 +137,7 @@ func (c Config) Validate() error {
 	if Duration(c.Collection.MinimumWindow) > Duration(c.Collection.BackfillWindow) || c.Collection.MaxLineBytes < 1024 || c.Collection.MaxLineBytes > 16777216 || c.Collection.MaxWindowBytes < int64(c.Collection.MaxLineBytes) || c.Collection.MaxWindowBytes > 1073741824 {
 		return errors.New("configuration_window")
 	}
-	if c.Report.HistoryDays < 1 || c.Report.HistoryDays > 366 || c.Report.Jobs < 1 || c.Report.Jobs > 64 || c.Report.ChunkSize < 1 || c.Report.ChunkSize > 1048576 {
+	if c.Report.HistoryDays < 1 || c.Report.HistoryDays > 366 || c.Report.Jobs < 1 || c.Report.Jobs > 12 || c.Report.ChunkSize < 32 || c.Report.ChunkSize > 1048576 {
 		return errors.New("configuration_report")
 	}
 	for _, s := range []string{c.Collection.Source.Cluster, c.Collection.Source.Namespace, c.Collection.Source.Container} {

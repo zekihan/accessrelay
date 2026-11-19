@@ -147,6 +147,33 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestGoAccessReportOptionBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		jobs, chunkSize int
+		valid           bool
+	}{
+		{name: "lower bounds", jobs: 1, chunkSize: 32, valid: true},
+		{name: "upper bounds", jobs: 12, chunkSize: 1048576, valid: true},
+		{name: "too many jobs", jobs: 13, chunkSize: 8192},
+		{name: "chunk too small", jobs: 6, chunkSize: 31},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.Collection.Source.Cluster = "fixture"
+			c.Report.Jobs, c.Report.ChunkSize = tc.jobs, tc.chunkSize
+			err := c.Validate()
+			if tc.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != "configuration_report" {
+				t.Fatalf("got %v, want configuration_report", err)
+			}
+		})
+	}
+}
+
 func TestGoAccessBooleanOverrideSpellingsRemainAccepted(t *testing.T) {
 	for key, value := range map[string]string{
 		"http-method": "true", "http-protocol": "no",

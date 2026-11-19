@@ -151,6 +151,8 @@ supervisor that terminates the whole process group after a hard parent failure.
 A renderer that does not produce a complete report and open its listener within
 five minutes is stopped and retried. Boolean report overrides are normalized to
 the spelling required by each GoAccess option.
+GoAccess accepts `report.jobs` from 1 to 12 and `report.chunkSize` from 32 to
+1,048,576.
 
 ## development and releases
 
