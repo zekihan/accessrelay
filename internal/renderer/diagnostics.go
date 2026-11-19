@@ -24,6 +24,19 @@ type diagnosticCapture struct {
 	writeError atomic.Bool
 }
 
+func readDiagnosticTail(f *os.File, limit int64) ([]byte, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if offset := info.Size() - limit; offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
+	return io.ReadAll(io.LimitReader(f, limit))
+}
+
 func startDiagnosticCapture(path string, limit int64) (*diagnosticCapture, error) {
 	pipe, err := openDiagnosticFIFO(path)
 	if err != nil {
@@ -37,7 +50,7 @@ func startDiagnosticCapture(path string, limit int64) (*diagnosticCapture, error
 	buffer := make([]byte, int(limit))
 	var total int64
 	if old, readErr := os.Open(snapshotPath); readErr == nil {
-		oldData, copyErr := io.ReadAll(io.LimitReader(old, limit))
+		oldData, copyErr := readDiagnosticTail(old, limit)
 		closeErr := old.Close()
 		if copyErr != nil || closeErr != nil {
 			_ = closeDiagnosticFIFO(pipe)
