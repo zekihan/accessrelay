@@ -32,6 +32,9 @@ func run() error {
 	validate := flag.Bool("validate", false, "validate configuration and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if flag.NArg() != 0 {
+		return errors.New("configuration_arguments")
+	}
 	if *showVersion {
 		fmt.Println(version)
 		return nil
