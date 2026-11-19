@@ -27,7 +27,7 @@ func start(name string, logger *slog.Logger) *Phase {
 }
 
 func (p *Phase) Progress(completed int64) {
-	if p == nil || p.finished {
+	if p == nil || p.finished || completed <= p.completed {
 		return
 	}
 	p.completed = completed
