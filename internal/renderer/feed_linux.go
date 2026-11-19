@@ -17,9 +17,13 @@ const feedSupported = true
 // child has not opened yet has offset zero. It returns the matching descriptor
 // so later calls can check it first.
 func readOffset(pid int, path string, cached int) (int, int64, bool) {
+	replay, err := os.Stat(path)
+	if err != nil {
+		return -1, 0, false
+	}
 	base := "/proc/" + strconv.Itoa(pid)
 	if cached >= 0 {
-		if offset, ok := descriptorOffset(base, cached, path); ok {
+		if offset, ok := descriptorOffset(base, cached, replay); ok {
 			return cached, offset, true
 		}
 	}
@@ -32,17 +36,17 @@ func readOffset(pid int, path string, cached int) (int, int64, bool) {
 		if err != nil {
 			continue
 		}
-		if offset, ok := descriptorOffset(base, fd, path); ok {
+		if offset, ok := descriptorOffset(base, fd, replay); ok {
 			return fd, offset, true
 		}
 	}
 	return -1, 0, true
 }
 
-func descriptorOffset(base string, fd int, path string) (int64, bool) {
+func descriptorOffset(base string, fd int, replay os.FileInfo) (int64, bool) {
 	name := strconv.Itoa(fd)
-	target, err := os.Readlink(base + "/fd/" + name)
-	if err != nil || target != path {
+	file, err := os.Stat(base + "/fd/" + name)
+	if err != nil || !os.SameFile(file, replay) {
 		return 0, false
 	}
 	f, err := os.Open(base + "/fdinfo/" + name)

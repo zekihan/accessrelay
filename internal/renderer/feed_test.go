@@ -94,6 +94,30 @@ func newFeedRenderer(t *testing.T) (*Renderer, string) {
 
 var feedLine = strings.Repeat("x", 63) + "\n"
 
+func TestReadOffsetThroughSymlinkedRuntime(t *testing.T) {
+	runtime := filepath.Join(t.TempDir(), "runtime")
+	if err := os.Symlink(t.TempDir(), runtime); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(runtime, "access.log")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	n, err := f.WriteString(feedLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := int(f.Fd())
+	for _, cached := range []int{-1, fd} {
+		gotFD, offset, ok := readOffset(os.Getpid(), path, cached)
+		if !ok || gotFD != fd || offset != int64(n) {
+			t.Fatalf("cached fd %d: readOffset = (%d, %d, %t), want (%d, %d, true)", cached, gotFD, offset, ok, fd, n)
+		}
+	}
+}
+
 func appendLines(t *testing.T, f *os.File, feed *Feed, lines int) {
 	t.Helper()
 	n, err := f.WriteString(strings.Repeat(feedLine, lines))
