@@ -177,6 +177,44 @@ func TestStopRestoresSnapshotWhenDiagnosticPathIsMissing(t *testing.T) {
 	}
 }
 
+func TestStartPreservesNewestInheritedDiagnostics(t *testing.T) {
+	for _, suffix := range []string{"", ".snapshot"} {
+		t.Run("unknowns.txt"+suffix, func(t *testing.T) {
+			root := t.TempDir()
+			binary := filepath.Join(root, "goaccess")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Repeat("new diagnostic!\n", 8)
+			c := config.Default()
+			c.StateDir = filepath.Join(root, "state")
+			c.RuntimeDir = filepath.Join(root, "runtime")
+			c.GoAccessBinary = binary
+			c.Limits.DiagnosticBytes = int64(len(want))
+			r, err := New(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := r.diagnosticPaths()[0]
+			if err := os.WriteFile(path+suffix, []byte("older diagnostic\n"+want), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Start(t.Context(), "test-generation"); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Stop(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			for _, saved := range []string{path, path + ".snapshot"} {
+				data, err := os.ReadFile(saved)
+				if err != nil || string(data) != want {
+					t.Errorf("%s = %q (%v), want newest %d bytes", filepath.Base(saved), data, err, len(want))
+				}
+			}
+		})
+	}
+}
+
 func TestStopReportsDiagnosticRestorationFailure(t *testing.T) {
 	root := t.TempDir()
 	c := config.Default()

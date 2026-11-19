@@ -79,13 +79,13 @@ func (r *Renderer) diagnosticPaths() []string {
 func (r *Renderer) prepareDiagnosticPath(path string) error {
 	info, err := os.Lstat(path)
 	if err == nil && info.Mode().IsRegular() {
-		// Preserve a bounded copy of legacy diagnostics before replacing the
+		// Preserve the newest legacy diagnostics before replacing the
 		// GoAccess destination with its drainable FIFO.
 		f, openErr := os.Open(path)
 		if openErr != nil {
 			return openErr
 		}
-		data, readErr := io.ReadAll(io.LimitReader(f, r.Config.Limits.DiagnosticBytes))
+		data, readErr := readDiagnosticTail(f, r.Config.Limits.DiagnosticBytes)
 		closeErr := f.Close()
 		if readErr != nil || closeErr != nil {
 			return errors.New("diagnostic_read")
@@ -332,7 +332,7 @@ func (r *Renderer) stopDiagnosticsLocked() error {
 		if os.IsNotExist(err) {
 			data, err = nil, nil
 		} else if err == nil {
-			data, err = io.ReadAll(io.LimitReader(snapshot, r.Config.Limits.DiagnosticBytes))
+			data, err = readDiagnosticTail(snapshot, r.Config.Limits.DiagnosticBytes)
 			if closeErr := snapshot.Close(); err == nil {
 				err = closeErr
 			}
