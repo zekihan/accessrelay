@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +207,50 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 		t.Fatal(copies, e)
 	}
 }
+
+func TestFetchClassifiesVictoriaLogsExecutionDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		split         bool
+	}{
+		{
+			name:    "execution deadline",
+			message: "the request couldn't be executed in 20.000 seconds; possible solutions: to increase -search.maxQueryDuration=30s; to pass bigger value to 'timeout' query arg",
+			split:   true,
+		},
+		{
+			name:    "queue deadline",
+			message: "couldn't start executing the request in 10.000 seconds, since -search.maxConcurrentRequests=4 concurrent requests are executed. Possible solutions: to reduce query load; to increase -search.maxQueryDuration=30s",
+		},
+		{
+			name:    "service unavailable",
+			message: "Service Unavailable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, tc.message, http.StatusServiceUnavailable)
+			}))
+			defer backend.Close()
+			c := config.Default()
+			c.RuntimeDir = t.TempDir()
+			c.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
+			connection, _ := json.Marshal(map[string]string{"url": backend.URL})
+			if err := os.WriteFile(c.ConnectionFile, connection, 0600); err != nil {
+				t.Fatal(err)
+			}
+			client := New(c)
+			defer client.Close()
+			start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
+			_, err := client.Fetch(context.Background(), start, start+1)
+			var queryErr *QueryError
+			if !errors.As(err, &queryErr) || queryErr.Reason != "backend_request" || queryErr.Split != tc.split {
+				t.Fatalf("error = %#v, want backend_request with Split=%t", err, tc.split)
+			}
+		})
+	}
+}
+
 func TestOperationalAndInvalidCLF(t *testing.T) {
 	ns, _ := ParseTimestamp("2026-10-01T00:01:00Z")
 	for _, tc := range []struct {

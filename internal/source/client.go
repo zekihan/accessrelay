@@ -90,8 +90,16 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, queryError("backend_request", errors.As(e, &ne) && ne.Timeout())
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != 200 {
-		return result, queryError("backend_request", response.StatusCode == 408 || response.StatusCode == 504)
+	if response.StatusCode != http.StatusOK {
+		split := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusGatewayTimeout
+		if response.StatusCode == http.StatusServiceUnavailable {
+			// VictoriaLogs uses 503 for both query execution and queue deadlines.
+			const deadline = "the request couldn't be executed in "
+			var prefix [len(deadline)]byte
+			_, readErr := io.ReadFull(response.Body, prefix[:])
+			split = readErr == nil && string(prefix[:]) == deadline
+		}
+		return result, queryError("backend_request", split)
 	}
 	if response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity" {
 		return result, queryError("response_encoding", false)
