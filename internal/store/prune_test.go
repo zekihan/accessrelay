@@ -30,8 +30,13 @@ func retentionFixture(t *testing.T) *Store {
 
 func TestPruneBatchesPreserveCutoffCascadesAndMetadata(t *testing.T) {
 	s := retentionFixture(t)
+	// The inherited schema permits retained events without a source ID.
+	if _, err := s.DB.Exec(`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(x'fe',100,'source-less',2);
+		INSERT INTO changes(event_id,copies) SELECT id,occurrences FROM events WHERE digest=x'fe'`); err != nil {
+		t.Fatal(err)
+	}
 	callbacks := 0
-	lastCount := 2*pruneBatchSize + 18
+	lastCount := 2*pruneBatchSize + 19
 	removed, err := s.Prune(context.Background(), 100, func() {
 		callbacks++
 		var remaining int
@@ -51,7 +56,7 @@ func TestPruneBatchesPreserveCutoffCascadesAndMetadata(t *testing.T) {
 		(SELECT COUNT(*) FROM sources), (SELECT SUM(occurrences) FROM events)`).Scan(&events, &changes, &sources, &copies); err != nil {
 		t.Fatal(err)
 	}
-	if events != 1 || changes != 1 || sources != 1 || copies != 3 {
+	if events != 2 || changes != 2 || sources != 1 || copies != 5 {
 		t.Fatalf("events=%d changes=%d sources=%d copies=%d", events, changes, sources, copies)
 	}
 	var cursor int
