@@ -1,6 +1,20 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
+  "definitions": {
+    "probeTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelaySeconds": { "type": "integer" },
+        "periodSeconds": { "type": "integer" },
+        "timeoutSeconds": { "type": "integer" },
+        "successThreshold": { "type": "integer" },
+        "failureThreshold": { "type": "integer" },
+        "terminationGracePeriodSeconds": { "type": "integer" }
+      }
+    }
+  },
   "properties": {
     "replicaCount": {
       "type": "integer",
@@ -372,6 +386,15 @@
     "terminationGracePeriodSeconds": {
       "type": "integer",
       "minimum": 30
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "startup": { "$ref": "#/definitions/probeTimings" },
+        "liveness": { "$ref": "#/definitions/probeTimings" },
+        "readiness": { "$ref": "#/definitions/probeTimings" }
+      }
     },
     "networkPolicy": {
       "type": "object",

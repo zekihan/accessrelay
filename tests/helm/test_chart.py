@@ -63,6 +63,41 @@ class ChartTests(unittest.TestCase):
         self.assertFalse(json.loads(config)["report"]["streamReplay"])
         self.assertEqual(json.loads(config)["database"]["synchronous"], "full")
 
+    def test_probe_timing_overrides_keep_default_endpoints(self):
+        objects = render(
+            "--set",
+            "probes.startup.initialDelaySeconds=5,"
+            "probes.liveness.terminationGracePeriodSeconds=40,"
+            "probes.readiness.successThreshold=2",
+        )
+        deployment = next(x for x in objects if x["kind"] == "Deployment")
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        for probe, path, timing, expected in [
+            ("startup", "/health", "initialDelaySeconds", 5),
+            ("liveness", "/health", "terminationGracePeriodSeconds", 40),
+            ("readiness", "/ready", "successThreshold", 2),
+        ]:
+            with self.subTest(probe=probe):
+                self.assertEqual(
+                    container[f"{probe}Probe"]["httpGet"], {"path": path, "port": "http"}
+                )
+                self.assertEqual(container[f"{probe}Probe"][timing], expected)
+
+    def test_probe_handler_overrides_fail(self):
+        handlers = {
+            "httpGet": {"path": "/status.json", "port": "http"},
+            "tcpSocket": {"port": "http"},
+            "exec": {"command": ["true"]},
+            "grpc": {"port": 8080},
+        }
+        for probe in ("startup", "liveness", "readiness"):
+            for handler, settings in handlers.items():
+                key = f"probes.{probe}.{handler}"
+                with self.subTest(key=key):
+                    with self.assertRaises(subprocess.CalledProcessError) as failure:
+                        render("--set-json", f"{key}={json.dumps(settings)}")
+                    self.assertIn(handler, failure.exception.stderr)
+
     def test_release_names_and_labels_render_as_strings(self):
         objects = render(
             "--set-string",
