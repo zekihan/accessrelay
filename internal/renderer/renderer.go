@@ -288,21 +288,20 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 			<-r.done
 		}
 	}
-	diagnosticErr := r.stopDiagnosticsLocked()
+	stopErr := r.stopDiagnosticsLocked()
 	// GoAccess writes its last HTML snapshot on graceful exit. A child stopped
 	// before its streamed replay was complete has only seen part of it.
 	if data, err := completeFile(r.output, r.Config.Limits.MaxReportBytes); err == nil && complete {
-		_ = atomicFile(r.ReportPath(), annotate(data))
+		if atomicFile(r.ReportPath(), annotate(data)) != nil && stopErr == nil {
+			stopErr = errors.New("report_publication")
+			r.status.Error = stopErr.Error()
+		}
 	}
 	r.cmd = nil
 	r.generation = ""
 	r.status.Running = false
 	r.status.Ready = false
-	if diagnosticErr != nil {
-		r.status.Error = "renderer_diagnostic_storage"
-		return errors.New("renderer_diagnostic_storage")
-	}
-	return nil
+	return stopErr
 }
 
 func (r *Renderer) stopDiagnosticsLocked() error {

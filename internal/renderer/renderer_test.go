@@ -118,6 +118,28 @@ func TestStopPublishesOnlyCompleteFinalReport(t *testing.T) {
 	}
 }
 
+func TestStopReportsFinalPublicationFailure(t *testing.T) {
+	r := newTestRenderer(t)
+	if err := os.Mkdir(r.ReportPath(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.output, []byte("<html><body>final</body></html>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Stop(t.Context()); err == nil || err.Error() != "report_publication" {
+		t.Errorf("Stop error = %v, want report_publication", err)
+	}
+	if status := r.Snapshot(); status.Running || status.Ready || status.Error != "report_publication" || r.Generation() != "" {
+		t.Errorf("unexpected renderer status after publication failure: %+v", status)
+	}
+	for _, path := range r.diagnosticPaths() {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Errorf("Stop did not restore diagnostic file %s: %v", path, err)
+		}
+	}
+}
+
 func TestNewThenStopLeavesRegularDiagnosticFiles(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
