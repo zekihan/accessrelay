@@ -188,13 +188,14 @@ func serveReportFile(w http.ResponseWriter, r *http.Request, f interface {
 	io.ReadSeeker
 	Stat() (os.FileInfo, error)
 }) {
-	info, err := f.Stat()
-	if err != nil {
+	if _, err := f.Stat(); err != nil {
 		http.Error(w, "report_unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeContent(w, r, "index.html", info.ModTime(), f)
+	// Last-Modified has second precision, so it cannot distinguish snapshots
+	// published within the same second. Serve these no-store reports without it.
+	http.ServeContent(w, r, "index.html", time.Time{}, f)
 }
