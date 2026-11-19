@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -166,8 +167,7 @@ func (c Config) Validate() error {
 	if state == string(filepath.Separator) || runtime == string(filepath.Separator) || state == runtime || strings.HasPrefix(runtime, state+"/") || strings.HasPrefix(state, runtime+"/") {
 		return errors.New("configuration_path_overlap")
 	}
-	u, err := url.Parse(c.Report.WebsocketURL)
-	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || strings.ContainsAny(c.Report.WebsocketURL, "\r\n\t ") {
+	if !validWebsocketURL(c.Report.WebsocketURL) {
 		return errors.New("configuration_websocket")
 	}
 	allowed := map[string]bool{"agent-list": true, "http-method": true, "http-protocol": true, "anonymize-ip": true, "ignore-crawlers": true, "unknowns-as-crawlers": true, "real-os": true, "with-output-resolver": true, "no-query-string": true, "date-spec": true, "hour-spec": true, "all-static-files": true, "4xx-to-unique-count": true, "double-decode": true, "crawlers-only": true}
@@ -207,4 +207,20 @@ func (c Config) Validate() error {
 		return errors.New("configuration_limits")
 	}
 	return nil
+}
+
+func validWebsocketURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.User != nil ||
+		u.Fragment != "" || u.RawQuery != "" || strings.ContainsAny(raw, "\r\n\t ") {
+		return false
+	}
+	if u.Hostname() == "" || strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		return err == nil && n != 0
+	}
+	return true
 }
