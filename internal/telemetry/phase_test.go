@@ -46,6 +46,35 @@ func TestPhaseProgressIsBoundedAndFinishIsFinal(t *testing.T) {
 	}
 }
 
+func TestPhaseProgressOnlyReportsAdvancingWork(t *testing.T) {
+	var output bytes.Buffer
+	p := start("replay_export", slog.New(slog.NewJSONHandler(&output, nil)))
+
+	p.lastReport = time.Now().Add(-31 * time.Second)
+	p.Progress(0)
+	if strings.Contains(output.String(), "phase_progress") {
+		t.Errorf("reported progress before any work: %s", output.String())
+	}
+
+	output.Reset()
+	p.lastReport = time.Now().Add(-31 * time.Second)
+	p.Progress(1000)
+	if !strings.Contains(output.String(), "phase_progress") {
+		t.Fatal("missing progress after completing work")
+	}
+
+	output.Reset()
+	p.lastReport = time.Now().Add(-31 * time.Second)
+	p.Progress(1000)
+	if output.Len() != 0 {
+		t.Errorf("reported the same count again: %s", output.String())
+	}
+	p.Progress(2000)
+	if !strings.Contains(output.String(), `"completed":2000`) {
+		t.Error("missing progress after the count advanced")
+	}
+}
+
 func TestDisabledPhase(t *testing.T) {
 	var phase *Phase
 	phase.Progress(1000)
