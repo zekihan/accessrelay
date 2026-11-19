@@ -793,8 +793,13 @@ func (c *Collector) Run(ctx context.Context) error {
 }
 
 func TreeSize(root string) (int64, error) {
+	// Follow the configured runtime root while leaving links inside it alone.
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return 0, err
+	}
 	var total int64
-	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
