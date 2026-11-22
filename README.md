@@ -44,7 +44,7 @@ Origin header remain supported; origin validation does not replace authenticatio
 For a standalone process, supply `--config /path/accessrelay.json` using
 [the example configuration](examples/config.json). GoAccess 1.12 must be on
 `PATH`, or set `goaccessBinary`. Use `--validate` to check configuration without
-opening the database and `--version` to inspect version metadata. The container
+opening the database and `--version` to print the version. The container
 bundles GoAccess and its dependencies; startup downloads nothing.
 
 ## collection contract
