@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -248,15 +247,16 @@ func TestRunServesHTTPAndExitsOnSignal(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	var status int
 	for time.Now().Before(deadline) {
-		resp, err := client.Get("http://" + addr + "/status.json")
+		// The startup handler serves /status.json before run registers its
+		// signal handler, but answers /metrics with 503. /metrics returns 200
+		// only from the activated handler, which run installs after
+		// signal.NotifyContext, so the interrupt below cannot kill the test.
+		resp, err := client.Get("http://" + addr + "/metrics")
 		if err == nil {
 			status = resp.StatusCode
-			body, _ := io.ReadAll(resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			// The startup handler answers before run registers its signal
-			// handler; the activated handler only answers afterwards, and
-			// activation happens after signal registration in run.
-			if status == http.StatusOK && strings.Contains(string(body), `"initialized"`) {
+			if status == http.StatusOK {
 				break
 			}
 			status = 0
