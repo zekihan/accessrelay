@@ -161,6 +161,12 @@ func (c *diagnosticCapture) drain() {
 				continue
 			}
 			c.writeError.Store(true)
+			// A persistent read error must not outlive a close request.
+			select {
+			case <-c.stop:
+				goto done
+			default:
+			}
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
