@@ -70,6 +70,7 @@ affinity: {}
 config:
   {
     "listen": ":8080",
+    "metricsAddr": ":9090",
     "stateDir": "/state",
     "runtimeDir": "/runtime",
     "connectionFile": "/connection/connection.json",

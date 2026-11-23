@@ -38,6 +38,9 @@
         "listen": {
           "const": ":8080"
         },
+        "metricsAddr": {
+          "const": ":9090"
+        },
         "stateDir": {
           "const": "/state"
         },

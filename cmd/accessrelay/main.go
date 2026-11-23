@@ -17,6 +17,7 @@ import (
 	"github.com/zekihan/accessrelay/internal/renderer"
 	"github.com/zekihan/accessrelay/internal/service"
 	"github.com/zekihan/accessrelay/internal/source"
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
 
 var version = "dev"
@@ -51,11 +52,22 @@ func run() error {
 		return fmt.Errorf("http_listen")
 	}
 	defer func() { _ = listener.Close() }()
+	var metricsListener net.Listener
+	if c.MetricsAddr != "" {
+		metricsListener, err = net.Listen("tcp", c.MetricsAddr)
+		if err != nil {
+			return fmt.Errorf("metrics_listen")
+		}
+		defer func() { _ = metricsListener.Close() }()
+	}
 	startup := service.NewStartupHandler()
-	server := &http.Server{Handler: startup, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
+	registry := commonsmetrics.New()
+	server := &http.Server{Handler: registry.Middleware(startup), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
 	defer func() { _ = server.Close() }()
 	serving := make(chan error, 1)
 	go func() { serving <- server.Serve(listener) }()
+	metricsDone := make(chan error, 1)
+	var metricsServer *http.Server
 	backend := source.New(c)
 	defer backend.Close()
 	coll, err := collector.New(c, backend, nil)
@@ -68,6 +80,12 @@ func run() error {
 		return err
 	}
 	coll.Consumer = r
+	if metricsListener != nil {
+		metricsServer = &http.Server{Handler: service.MetricsHandler(registry, coll, r), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
+		go func() { metricsDone <- metricsServer.Serve(metricsListener) }()
+	} else {
+		close(metricsDone)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go r.Run(ctx)
@@ -89,6 +107,14 @@ func run() error {
 	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
 	defer stop()
 	shutdownErr := waitForShutdown(shutdown, server, finished)
+	if metricsListener != nil {
+		metricsShutdownErr := metricsServer.Shutdown(shutdown)
+		metricsDoneErr := <-metricsDone
+		if errors.Is(metricsDoneErr, http.ErrServerClosed) {
+			metricsDoneErr = nil
+		}
+		shutdownErr = errors.Join(shutdownErr, metricsShutdownErr, metricsDoneErr)
+	}
 	if result != nil {
 		return result
 	}

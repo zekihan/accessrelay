@@ -113,9 +113,14 @@ class RuntimeTests(unittest.TestCase):
                 return [arg for directory in ["state", "runtime", "config", "connection"] for arg in ["-v", f"{root}/{kind}/{directory}:/{directory}" + (":ro" if directory in {"config", "connection"} else "")]]
 
             ports = {}
+            metrics_ports = {}
 
             def request(kind, path="/"):
                 with urllib.request.urlopen(f"http://127.0.0.1:{ports[kind]}{path}", timeout=3) as response:
+                    return response.read().decode()
+
+            def metrics_request():
+                with urllib.request.urlopen(f"http://127.0.0.1:{metrics_ports['app']}/metrics", timeout=3) as response:
                     return response.read().decode()
 
             def websocket(kind, origin=None):
@@ -138,11 +143,13 @@ class RuntimeTests(unittest.TestCase):
                 docker("restart", "-t", "110", names["goaccess"])
                 for kind, key in [("app", "app"), ("legacy", "web")]:
                     ports[kind] = int(docker("port", names[key], "8080/tcp").stdout.strip().rsplit(":", 1)[1])
+                    if kind == "app":
+                        metrics_ports[kind] = int(docker("port", names[key], "9090/tcp").stdout.strip().rsplit(":", 1)[1])
                     wait(lambda: websocket(kind))
                     wait(lambda: report(request(kind))["general"]["valid_requests"] == expected)
 
             try:
-                docker("run", "-d", "--name", names["app"], "--add-host", "host.docker.internal:host-gateway", *common, *mounts("app"), "-p", "127.0.0.1::8080", IMAGE)
+                docker("run", "-d", "--name", names["app"], "--add-host", "host.docker.internal:host-gateway", *common, *mounts("app"), "-p", "127.0.0.1::8080", "-p", "127.0.0.1::9090", IMAGE)
                 started.append(names["app"])
                 docker("run", "-d", "--name", names["web"], "--add-host", "host.docker.internal:host-gateway", *common, *mounts("legacy"), "-p", "127.0.0.1::8080", "--entrypoint", "nginx", NGINX, "-c", "/config/nginx.conf", "-g", "daemon off;")
                 started.append(names["web"])
@@ -151,6 +158,8 @@ class RuntimeTests(unittest.TestCase):
                     started.append(names[key])
                 for kind, key in [("app", "app"), ("legacy", "web")]:
                     ports[kind] = int(docker("port", names[key], "8080/tcp").stdout.strip().rsplit(":", 1)[1])
+                    if kind == "app":
+                        metrics_ports[kind] = int(docker("port", names[key], "9090/tcp").stdout.strip().rsplit(":", 1)[1])
                     wait(lambda: "</html>" in request(kind))
                     wait(lambda: websocket(kind))
                     self.assertEqual(report(request(kind))["general"]["valid_requests"], 0)
@@ -209,7 +218,10 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(data["general"]["valid_requests"], 4)
                     self.assertEqual(data["general"]["failed_requests"], 1)
                     self.assertIn("Home Assistant", request(kind))
-                self.assertIn("accessrelay_cursor_lag_seconds", request("app", "/metrics"))
+                self.assertIn("accessrelay_cursor_lag_seconds", metrics_request())
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    request("app", "/metrics")
+                self.assertEqual(error.exception.code, 503)
                 # A competing process sharing the state exits before starting a renderer.
                 result = docker("run", "--rm", *common, *mounts("app"), IMAGE, check=False)
                 self.assertNotEqual(result.returncode, 0)

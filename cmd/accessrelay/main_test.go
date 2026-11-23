@@ -226,12 +226,17 @@ func TestRunServesHTTPAndExitsOnSignal(t *testing.T) {
 	if err := probe.Close(); err != nil {
 		t.Fatal(err)
 	}
+	metricsAddr, metricsProbe := freePort(t)
+	if err := metricsProbe.Close(); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(t.TempDir(), "goaccess")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	path := writeTestConfig(t, func(c *config.Config) {
 		c.Listen = addr
+		c.MetricsAddr = metricsAddr
 		c.GoAccessBinary = binary
 	})
 	oldCommandLine := flag.CommandLine
@@ -247,11 +252,7 @@ func TestRunServesHTTPAndExitsOnSignal(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	var status int
 	for time.Now().Before(deadline) {
-		// The startup handler serves /status.json before run registers its
-		// signal handler, but answers /metrics with 503. /metrics returns 200
-		// only from the activated handler, which run installs after
-		// signal.NotifyContext, so the interrupt below cannot kill the test.
-		resp, err := client.Get("http://" + addr + "/metrics")
+		resp, err := client.Get("http://" + metricsAddr + "/metrics")
 		if err == nil {
 			status = resp.StatusCode
 			_, _ = io.Copy(io.Discard, resp.Body)

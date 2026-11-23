@@ -20,7 +20,7 @@ COPY --from=build /GoAccess-MIT.txt /usr/share/accessrelay/goaccess/LICENSE
 COPY LICENSE NOTICE LICENSES /usr/share/accessrelay/licenses/
 USER 1000:1000
 ENV TZ=UTC
-EXPOSE 8080
+EXPOSE 8080 9090
 ENTRYPOINT ["/accessrelay"]
 CMD ["--config", "/config/accessrelay.json"]
 LABEL org.opencontainers.image.source="https://github.com/zekihan/accessrelay" \
