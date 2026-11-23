@@ -14,12 +14,13 @@ NetworkPolicy. No RBAC resources or service-account tokens are needed.
 | `storage.size`, `storageClass`, `labels`, `annotations` | 2Gi; default class; deployment-specific policy |
 | `runtimeSizeLimit`, `tmpSizeLimit` | 3Gi and 64Mi emptyDirs |
 | `config.collection` | source, delay, polling overlap, reconciliation, backfill and query/line/window bounds |
+| `config.metricsAddr` | internal metrics listener address, default `:9090`; empty disables it |
 | `config.database` | SQLite mapping, integrity-check timing, replay prefetch and synchronous mode |
 | `config.report` | UTC history, workers, chunk size, replay streaming, public WebSocket URL, safe report overrides and extra browser mappings |
 | `config.limits` | database/runtime/replay/report/diagnostic budgets and free-space reserve |
 | `resources` | CPU/memory/ephemeral-storage requests and limits |
 | `probes` | startup/liveness/readiness timing; endpoints remain runtime owned |
-| `service` | configurable service port/type/annotations; runtime port 8080 |
+| `service` | configurable service port/type/annotations; public runtime port 8080 |
 | `ingress` | host, class, annotations, TLS and additional routes; disabled by default |
 | `authService` | optional namespace-local ExternalName Service for an ingress authentication outpost |
 | `networkPolicy.ingressPeers` | clients allowed to TCP 8080; empty list denies ingress |

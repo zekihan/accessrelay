@@ -3,7 +3,6 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -13,12 +12,65 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/renderer"
 	"github.com/zekihan/accessrelay/internal/source"
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
+
+func MetricsHandler(registry *commonsmetrics.Registry, c *collector.Collector, r *renderer.Renderer) http.Handler {
+	queries := registry.Counter("accessrelay_queries_total", nil)
+	retries := registry.Counter("accessrelay_retries_total", nil)
+	committedWindows := registry.Counter("accessrelay_committed_windows_total", nil)
+	responseBytes := registry.Counter("accessrelay_response_bytes_total", nil)
+	exportFailures := registry.Counter("accessrelay_export_failures_total", nil)
+	rendererRestarts := registry.Counter("accessrelay_renderer_restarts_total", nil)
+	lag := registry.Gauge("accessrelay_cursor_lag_seconds", nil)
+	ready := registry.Gauge("accessrelay_renderer_ready", nil)
+	databaseBytes := registry.Gauge("accessrelay_database_bytes", nil)
+	storagePressure := registry.Gauge("accessrelay_storage_pressure", nil)
+	var previous struct {
+		sync.Mutex
+		queries, retries, committedWindows, responseBytes, exportFailures, rendererRestarts uint64
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		s := c.Snapshot()
+		rs := r.Snapshot()
+		previous.Lock()
+		queries.Add(int(s.Queries - previous.queries))
+		retries.Add(int(s.Retries - previous.retries))
+		committedWindows.Add(int(s.CommittedWindows - previous.committedWindows))
+		responseBytes.Add(int(s.CommittedBytes - previous.responseBytes))
+		exportFailures.Add(int(s.ExportFailures - previous.exportFailures))
+		rendererRestarts.Add(int(rs.Restarts - previous.rendererRestarts))
+		previous.queries, previous.retries = s.Queries, s.Retries
+		previous.committedWindows, previous.responseBytes = s.CommittedWindows, s.CommittedBytes
+		previous.exportFailures, previous.rendererRestarts = s.ExportFailures, rs.Restarts
+		previous.Unlock()
+		lagSeconds := 0.0
+		if s.Cursor != nil {
+			if ns, err := source.ParseTimestamp(*s.Cursor); err == nil {
+				lagSeconds = max(0, time.Since(time.Unix(0, ns)).Seconds())
+			}
+		}
+		lag.Set(lagSeconds)
+		if rs.Ready {
+			ready.Set(1)
+		} else {
+			ready.Set(0)
+		}
+		databaseBytes.Set(float64(s.DatabaseBytes))
+		if s.StoragePressure {
+			storagePressure.Set(1)
+		} else {
+			storagePressure.Set(0)
+		}
+		registry.Handler().ServeHTTP(w, req)
+	})
+}
 
 func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 	target, _ := url.Parse("http://127.0.0.1:7890")
@@ -69,29 +121,6 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 			collector.Status
 			Renderer renderer.Snapshot `json:"renderer"`
 		}{s, r.Snapshot()})
-	})
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		s := c.Snapshot()
-		rs := r.Snapshot()
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		lag := 0.
-		if s.LagSeconds != nil {
-			lag = *s.LagSeconds
-			if s.Cursor != nil {
-				if ns, err := source.ParseTimestamp(*s.Cursor); err == nil {
-					lag = max(0, time.Since(time.Unix(0, ns)).Seconds())
-				}
-			}
-		}
-		healthy := 0
-		if rs.Ready {
-			healthy = 1
-		}
-		pressure := 0
-		if s.StoragePressure {
-			pressure = 1
-		}
-		_, _ = fmt.Fprintf(w, "accessrelay_queries_total %d\naccessrelay_retries_total %d\naccessrelay_committed_windows_total %d\naccessrelay_response_bytes_total %d\naccessrelay_export_failures_total %d\naccessrelay_cursor_lag_seconds %g\naccessrelay_renderer_ready %d\naccessrelay_renderer_restarts_total %d\naccessrelay_database_bytes %d\naccessrelay_storage_pressure %d\n", s.Queries, s.Retries, s.CommittedWindows, s.CommittedBytes, s.ExportFailures, lag, healthy, rs.Restarts, s.DatabaseBytes, pressure)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/" && req.URL.Path != "/index.html" {

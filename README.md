@@ -10,7 +10,7 @@ process supervision and HTTP serving.
 | `/`, `/index.html` | last complete GoAccess HTML; 503 until the first report exists |
 | `/ws` | GoAccess WebSocket proxy on loopback; 503 while the renderer is unavailable |
 | `/status.json` | cursor, freshness, collection errors, retention gaps, storage and renderer state |
-| `/metrics` | Prometheus collection, lag, retry, export, renderer and storage metrics |
+| `:9090/metrics` | Internal Prometheus metrics listener, separate from the public HTTP listener |
 | `/health` | local collector progress, independent of VictoriaLogs availability |
 | `/ready` | 200 with a report after replay initialization and renderer readiness; otherwise 503 |
 
@@ -31,7 +31,7 @@ kubectl -n accessrelay port-forward service/accessrelay 8080:8080
 
 Images: `docker.io/zekihan/accessrelay:0.1.1` and
 `ghcr.io/zekihan/accessrelay:0.1.1`, for Linux amd64 and arm64.
-The [chart reference](charts/accessrelay/README.md) describes all configuration.
+The [chart reference](charts/accessrelay/README.md) describes all configuration. The metrics listener defaults to `:9090` and can be disabled with an empty `metricsAddr` in standalone configuration. It exposes Go runtime/process and HTTP request metrics, plus collector lag, renderer readiness, database size and storage pressure gauges. Keep this listener on the internal pod network.
 Set the source cluster and the network policy's backend and ingress peers before
 installing. Default policies allow DNS and deny other inbound/outbound traffic.
 TLS and authentication belong at your ingress. The service has no built-in

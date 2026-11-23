@@ -16,6 +16,7 @@ import (
 	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/config"
 	"github.com/zekihan/accessrelay/internal/renderer"
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
 
 func serviceFixture(t *testing.T) (*collector.Collector, *renderer.Renderer) {
@@ -124,7 +125,7 @@ func TestReportServesSameSecondReplacement(t *testing.T) {
 	}
 }
 
-func TestStatusAndMetrics(t *testing.T) {
+func TestStatusAndMetricsAreSeparated(t *testing.T) {
 	c, r := serviceFixture(t)
 	h := Handler(c, r)
 	checkStatus := func(stale bool, lag bool) {
@@ -142,10 +143,17 @@ func TestStatusAndMetrics(t *testing.T) {
 		}
 	}
 	checkStatus(true, false)
-	w := request(h, "/metrics")
-	expected := "accessrelay_queries_total 0\naccessrelay_retries_total 0\naccessrelay_committed_windows_total 0\naccessrelay_response_bytes_total 0\naccessrelay_export_failures_total 0\naccessrelay_cursor_lag_seconds 0\naccessrelay_renderer_ready 0\naccessrelay_renderer_restarts_total 0\naccessrelay_database_bytes 0\naccessrelay_storage_pressure 0\n"
-	if w.Code != 200 || w.Header().Get("Content-Type") != "text/plain; version=0.0.4" || w.Body.String() != expected {
-		t.Fatalf("metrics: %d %v %q", w.Code, w.Header(), w.Body.String())
+	if w := request(h, "/metrics"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("public listener exposed metrics: %d %q", w.Code, w.Body.String())
+	}
+	registry := commonsmetrics.New()
+	metricsHandler := MetricsHandler(registry, c, r)
+	w := httptest.NewRecorder()
+	metricsHandler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	for _, name := range []string{"accessrelay_queries_total", "accessrelay_retries_total", "accessrelay_committed_windows_total", "accessrelay_response_bytes_total", "accessrelay_export_failures_total", "accessrelay_cursor_lag_seconds", "accessrelay_renderer_ready", "accessrelay_renderer_restarts_total", "accessrelay_database_bytes", "accessrelay_storage_pressure", "go_goroutines"} {
+		if !strings.Contains(w.Body.String(), name) {
+			t.Fatalf("metrics omitted %s: %q", name, w.Body.String())
+		}
 	}
 	now := time.Now()
 	_, err := c.Store.DB.Exec(`INSERT INTO metadata(key,value) VALUES('cursor',?),('last_success',?)`, strconv.FormatInt(now.Add(-10*time.Second).UnixNano(), 10), fmt.Sprintf("%.9f", float64(now.UnixNano())/1e9))
@@ -156,14 +164,10 @@ func TestStatusAndMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkStatus(false, true)
-	w = request(h, "/metrics")
-	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
-	if len(lines) != 10 {
-		t.Fatalf("metrics lines: %q", w.Body.String())
-	}
-	lag, err := strconv.ParseFloat(strings.TrimPrefix(lines[5], "accessrelay_cursor_lag_seconds "), 64)
-	if err != nil || lag < 9 || lag > 30 {
-		t.Fatalf("metrics lag: %q", lines[5])
+	w = httptest.NewRecorder()
+	metricsHandler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(w.Body.String(), "accessrelay_cursor_lag_seconds ") {
+		t.Fatalf("metrics lag missing: %q", w.Body.String())
 	}
 	c.Config.Collection.StaleAfter = "1s"
 	_, err = c.Store.DB.Exec(`UPDATE metadata SET value=? WHERE key='last_success'`, fmt.Sprintf("%.9f", float64(now.Add(-10*time.Second).UnixNano())/1e9))

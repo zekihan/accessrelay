@@ -10,7 +10,7 @@ import (
 
 func TestStartupStatusAndActivation(t *testing.T) {
 	handler := NewStartupHandler()
-	for _, path := range []string{"/ready", "/health", "/", "/ws", "/metrics"} {
+	for _, path := range []string{"/ready", "/health", "/", "/ws"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("GET", path, nil))
 		if response.Code != http.StatusServiceUnavailable {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -69,6 +70,7 @@ func (d Database) BackgroundIntegrity() bool { return d.IntegrityCheck == "backg
 
 type Config struct {
 	Listen         string     `json:"listen"`
+	MetricsAddr    string     `json:"metricsAddr"`
 	StateDir       string     `json:"stateDir"`
 	RuntimeDir     string     `json:"runtimeDir"`
 	ConnectionFile string     `json:"connectionFile"`
@@ -80,7 +82,7 @@ type Config struct {
 }
 
 func Default() Config {
-	return Config{Listen: ":8080", StateDir: "/state", RuntimeDir: "/runtime", ConnectionFile: "/connection/connection.json", GoAccessBinary: "goaccess",
+	return Config{Listen: ":8080", MetricsAddr: ":9090", StateDir: "/state", RuntimeDir: "/runtime", ConnectionFile: "/connection/connection.json", GoAccessBinary: "goaccess",
 		Collection: Collection{Source: Source{Namespace: "traefik", Container: "traefik"}, PollInterval: "5s", IngestionDelay: "30s", Overlap: "5m", ReconciliationInterval: "1h", BackfillWindow: "5m", MinimumWindow: "1s", QueryTimeout: "20s", StaleAfter: "2m", MaxLineBytes: 1048576, MaxWindowBytes: 268435456},
 		Report:     Report{HistoryDays: 7, Jobs: 6, ChunkSize: 8192, WebsocketURL: "ws://localhost:8080/ws", ConfigOverrides: map[string]string{}},
 		Limits:     Limits{MaxRuntimeBytes: 2684354560, MaxDatabaseBytes: 1610612736, MaxReplayBytes: 1073741824, MaxReportBytes: 67108864, DiagnosticBytes: 8388608, ReserveBytes: 33554432}}
@@ -116,6 +118,15 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c Config) Validate() error {
+	if c.MetricsAddr != "" {
+		_, port, err := net.SplitHostPort(c.MetricsAddr)
+		if err != nil {
+			return errors.New("configuration_metrics_address")
+		}
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+			return errors.New("configuration_metrics_address")
+		}
+	}
 	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 || c.Database.ReplayPrefetch < 0 || c.Database.ReplayPrefetch > 64 {
 		return errors.New("configuration_database")
 	}
