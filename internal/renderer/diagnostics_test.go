@@ -14,7 +14,14 @@ func TestDiagnosticCaptureCloseOnPersistentReadError(t *testing.T) {
 	defer snapshot.Close()
 	// A descriptor that fails every read (EBADF) must not deadlock close:
 	// drain only consulted the stop channel on would-block reads.
-	capture := &diagnosticCapture{pipe: -1, snapshot: snapshot, limit: 16, buffer: make([]byte, 16), done: make(chan struct{}), stop: make(chan struct{})}
+	capture := &diagnosticCapture{
+		pipe:     -1,
+		snapshot: snapshot,
+		limit:    16,
+		buffer:   make([]byte, 16),
+		done:     make(chan struct{}),
+		stop:     make(chan struct{}),
+	}
 	go capture.drain()
 	closed := make(chan struct{})
 	go func() {

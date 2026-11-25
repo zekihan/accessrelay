@@ -1,7 +1,6 @@
 package source
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -35,7 +34,8 @@ func TestRouter(t *testing.T) {
 		}
 	}
 	excluded := map[string]bool{"router@kubernetes": true}
-	if !Excluded(Line, excluded) || Excluded(journaldLine, excluded) || Excluded("level=info started", excluded) {
+	if !Excluded(Line, excluded) || Excluded(journaldLine, excluded) ||
+		Excluded("level=info started", excluded) {
 		t.Fatal("exclusion does not follow the router field")
 	}
 	if Excluded(strings.Replace(Line, "router@kubernetes", "router@kubernetes-2", 1), excluded) {
@@ -49,7 +49,13 @@ func TestFetchSkipsExcludedRouters(t *testing.T) {
 	end, _ := ParseTimestamp("2026-11-02T00:05:00Z")
 	var body strings.Builder
 	for i, message := range []string{journaldLine, Line, journaldLine} {
-		raw, _ := json.Marshal(map[string]string{"_time": "2026-11-02T00:00:0" + string(rune('1'+i)) + "Z", "_stream_id": "a", "_msg": message})
+		raw, _ := json.Marshal(
+			map[string]string{
+				"_time":      "2026-11-02T00:00:0" + string(rune('1'+i)) + "Z",
+				"_stream_id": "a",
+				"_msg":       message,
+			},
+		)
 		body.Write(append(raw, '\n'))
 	}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -60,14 +66,16 @@ func TestFetchSkipsExcludedRouters(t *testing.T) {
 	c.RuntimeDir = filepath.Join(root, "runtime")
 	c.ConnectionFile = filepath.Join(root, "connection.json")
 	c.Collection.Source.Cluster = "fixture"
-	c.Collection.ExcludeRouters = []string{"traefik-mtls-journald-upload-fcc44d81276fc53b472d@kubernetescrd"}
+	c.Collection.ExcludeRouters = []string{
+		"traefik-mtls-journald-upload-fcc44d81276fc53b472d@kubernetescrd",
+	}
 	raw, _ := json.Marshal(map[string]string{"url": backend.URL})
-	if err := os.WriteFile(c.ConnectionFile, raw, 0600); err != nil {
+	if err := os.WriteFile(c.ConnectionFile, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client := New(c)
 	defer client.Close()
-	result, err := client.Fetch(context.Background(), start, end)
+	result, err := client.Fetch(t.Context(), start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +90,9 @@ func TestFetchSkipsExcludedRouters(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	var message string
 	var records int
-	if err = db.QueryRow(`SELECT COUNT(*),MAX(message) FROM records`).Scan(&records, &message); err != nil || records != 1 || message != Line {
+	if err = db.QueryRow(`SELECT COUNT(*),MAX(message) FROM records`).
+		Scan(&records, &message); err != nil || records != 1 ||
+		message != Line {
 		t.Fatalf("records=%d message=%q err=%v", records, message, err)
 	}
 }

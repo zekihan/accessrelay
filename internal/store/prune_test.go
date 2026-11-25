@@ -31,13 +31,15 @@ func retentionFixture(t *testing.T) *Store {
 func TestPruneBatchesPreserveCutoffCascadesAndMetadata(t *testing.T) {
 	s := retentionFixture(t)
 	// The inherited schema permits retained events without a source ID.
-	if _, err := s.DB.Exec(`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(x'fe',100,'source-less',2);
-		INSERT INTO changes(event_id,copies) SELECT id,occurrences FROM events WHERE digest=x'fe'`); err != nil {
+	if _, err := s.DB.Exec(
+		`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(x'fe',100,'source-less',2);
+		INSERT INTO changes(event_id,copies) SELECT id,occurrences FROM events WHERE digest=x'fe'`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	callbacks := 0
 	lastCount := 2*pruneBatchSize + 19
-	removed, err := s.Prune(context.Background(), 100, func() {
+	removed, err := s.Prune(t.Context(), 100, func() {
 		callbacks++
 		var remaining int
 		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&remaining); err != nil {
@@ -63,7 +65,7 @@ func TestPruneBatchesPreserveCutoffCascadesAndMetadata(t *testing.T) {
 	if err := s.Get("cursor", &cursor); err != nil || cursor != 1000 {
 		t.Fatalf("cursor=%d err=%v", cursor, err)
 	}
-	removed, err = s.Prune(context.Background(), 100, nil)
+	removed, err = s.Prune(t.Context(), 100, nil)
 	if err != nil || removed != 0 {
 		t.Fatalf("repeat removed=%d err=%v", removed, err)
 	}
@@ -71,13 +73,13 @@ func TestPruneBatchesPreserveCutoffCascadesAndMetadata(t *testing.T) {
 
 func TestPruneCancellationRetainsCommittedProgressAndResumes(t *testing.T) {
 	s := retentionFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	removed, err := s.Prune(ctx, 100, cancel)
 	if !errors.Is(err, context.Canceled) || removed != pruneBatchSize {
 		t.Fatalf("removed=%d err=%v", removed, err)
 	}
-	remaining, err := s.Prune(context.Background(), 100, nil)
+	remaining, err := s.Prune(t.Context(), 100, nil)
 	if err != nil || remaining != pruneBatchSize+17 {
 		t.Fatalf("remaining=%d err=%v", remaining, err)
 	}
@@ -118,7 +120,7 @@ func (w cancelReplay) Write(b []byte) (int, error) {
 
 func TestExportCancellationLeavesAuthoritativeStateUnchanged(t *testing.T) {
 	s := retentionFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	_, err := s.Export(ctx, cancelReplay{cancel}, 0, true, 1<<20, nil)
 	if !errors.Is(err, context.Canceled) {
@@ -139,7 +141,7 @@ func TestPruneWidensAutocheckpointOnlyDuringRetention(t *testing.T) {
 		}
 		return pages
 	}
-	if _, err := s.Prune(context.Background(), 100, func() {
+	if _, err := s.Prune(t.Context(), 100, func() {
 		if got := autocheckpoint(); got != pruneAutocheckpoint {
 			t.Fatalf("wal_autocheckpoint=%d during retention, want %d", got, pruneAutocheckpoint)
 		}

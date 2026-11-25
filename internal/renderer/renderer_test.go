@@ -17,7 +17,8 @@ func newTestRenderer(t *testing.T) *Renderer {
 	t.Helper()
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
@@ -32,7 +33,7 @@ func newTestRenderer(t *testing.T) *Renderer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		if err := r.Stop(ctx); err != nil {
 			t.Error(err)
@@ -54,10 +55,12 @@ func TestRunReapsExitedChild(t *testing.T) {
 	for {
 		snapshot := r.Snapshot()
 		if snapshot.Error == "renderer_exit" {
-			if snapshot.Running || snapshot.Ready || snapshot.Restarts != 1 || r.Generation() != "" {
+			if snapshot.Running || snapshot.Ready || snapshot.Restarts != 1 ||
+				r.Generation() != "" {
 				t.Fatalf("unexpected exit status: %+v", snapshot)
 			}
-			if child.ProcessState == nil || !child.ProcessState.Exited() || child.ProcessState.ExitCode() != 7 {
+			if child.ProcessState == nil || !child.ProcessState.Exited() ||
+				child.ProcessState.ExitCode() != 7 {
 				t.Fatal("failed child was not reaped with its exit status")
 			}
 			return
@@ -79,14 +82,14 @@ func TestStopPublishesOnlyCompleteFinalReport(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newTestRenderer(t)
 			previous := "<html><body>previous</body></html>"
-			if err := os.WriteFile(r.ReportPath(), []byte(previous), 0600); err != nil {
+			if err := os.WriteFile(r.ReportPath(), []byte(previous), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			final := "<html><body>final"
 			if complete {
 				final += "</body></html>"
 			}
-			if err := os.WriteFile(r.output, []byte(final), 0600); err != nil {
+			if err := os.WriteFile(r.output, []byte(final), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -99,7 +102,8 @@ func TestStopPublishesOnlyCompleteFinalReport(t *testing.T) {
 				t.Fatal(err)
 			}
 			if complete {
-				if !strings.Contains(string(data), "final") || !strings.Contains(string(data), "accessrelay-status") {
+				if !strings.Contains(string(data), "final") ||
+					!strings.Contains(string(data), "accessrelay-status") {
 					t.Fatalf("complete final report was not published: %s", data)
 				}
 			} else if string(data) != previous {
@@ -120,16 +124,18 @@ func TestStopPublishesOnlyCompleteFinalReport(t *testing.T) {
 
 func TestStopReportsFinalPublicationFailure(t *testing.T) {
 	r := newTestRenderer(t)
-	if err := os.Mkdir(r.ReportPath(), 0700); err != nil {
+	if err := os.Mkdir(r.ReportPath(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(r.output, []byte("<html><body>final</body></html>"), 0600); err != nil {
+	if err := os.WriteFile(r.output, []byte("<html><body>final</body></html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Stop(t.Context()); err == nil || err.Error() != "report_publication" {
 		t.Errorf("Stop error = %v, want report_publication", err)
 	}
-	if status := r.Snapshot(); status.Running || status.Ready || status.Error != "report_publication" || r.Generation() != "" {
+	if status := r.Snapshot(); status.Running || status.Ready ||
+		status.Error != "report_publication" ||
+		r.Generation() != "" {
 		t.Errorf("unexpected renderer status after publication failure: %+v", status)
 	}
 	for _, path := range r.diagnosticPaths() {
@@ -143,7 +149,8 @@ func TestStopReportsFinalPublicationFailure(t *testing.T) {
 func TestNewThenStopLeavesRegularDiagnosticFiles(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
@@ -172,7 +179,12 @@ func TestNewThenStopLeavesRegularDiagnosticFiles(t *testing.T) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil || len(data) != 0 {
-			t.Fatalf("clean stop did not leave an empty diagnostic file %s: %q (%v)", path, data, err)
+			t.Fatalf(
+				"clean stop did not leave an empty diagnostic file %s: %q (%v)",
+				path,
+				data,
+				err,
+			)
 		}
 	}
 }
@@ -187,7 +199,7 @@ func TestStopRestoresSnapshotWhenDiagnosticPathIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := r.diagnosticPaths()[0]
-	if err := os.WriteFile(path+".snapshot", []byte("saved diagnostic"), 0600); err != nil {
+	if err := os.WriteFile(path+".snapshot", []byte("saved diagnostic"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Stop(t.Context()); err != nil {
@@ -204,7 +216,8 @@ func TestStartPreservesNewestInheritedDiagnostics(t *testing.T) {
 		t.Run("unknowns.txt"+suffix, func(t *testing.T) {
 			root := t.TempDir()
 			binary := filepath.Join(root, "goaccess")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			// #nosec G306 -- test executables need the execute bit.
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			want := strings.Repeat("new diagnostic!\n", 8)
@@ -218,7 +231,11 @@ func TestStartPreservesNewestInheritedDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := r.diagnosticPaths()[0]
-			if err := os.WriteFile(path+suffix, []byte("older diagnostic\n"+want), 0600); err != nil {
+			if err := os.WriteFile(
+				path+suffix,
+				[]byte("older diagnostic\n"+want),
+				0o600,
+			); err != nil {
 				t.Fatal(err)
 			}
 			if err := r.Start(t.Context(), "test-generation"); err != nil {
@@ -230,7 +247,13 @@ func TestStartPreservesNewestInheritedDiagnostics(t *testing.T) {
 			for _, saved := range []string{path, path + ".snapshot"} {
 				data, err := os.ReadFile(saved)
 				if err != nil || string(data) != want {
-					t.Errorf("%s = %q (%v), want newest %d bytes", filepath.Base(saved), data, err, len(want))
+					t.Errorf(
+						"%s = %q (%v), want newest %d bytes",
+						filepath.Base(saved),
+						data,
+						err,
+						len(want),
+					)
 				}
 			}
 		})
@@ -246,7 +269,7 @@ func TestStopReportsDiagnosticRestorationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(r.diagnosticPaths()[0], 0700); err != nil {
+	if err := os.Mkdir(r.diagnosticPaths()[0], 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Stop(t.Context()); err == nil || err.Error() != "renderer_diagnostic_storage" {
@@ -276,7 +299,11 @@ func TestFailedChildStartRestoresDiagnosticsWithoutPriorSnapshot(t *testing.T) {
 		}
 		_ = os.Remove(path + ".snapshot")
 	}
-	if err := r.Start(t.Context(), "test-generation"); err == nil || err.Error() != "renderer_start" {
+	if err := r.Start(
+		t.Context(),
+		"test-generation",
+	); err == nil ||
+		err.Error() != "renderer_start" {
 		t.Fatalf("Start error = %v, want renderer_start", err)
 	}
 	for _, path := range r.diagnosticPaths() {
@@ -286,7 +313,12 @@ func TestFailedChildStartRestoresDiagnosticsWithoutPriorSnapshot(t *testing.T) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil || len(data) != 0 {
-			t.Fatalf("failed child start did not restore an empty file %s: %q (%v)", path, data, err)
+			t.Fatalf(
+				"failed child start did not restore an empty file %s: %q (%v)",
+				path,
+				data,
+				err,
+			)
 		}
 	}
 }
@@ -294,7 +326,8 @@ func TestFailedChildStartRestoresDiagnosticsWithoutPriorSnapshot(t *testing.T) {
 func TestPartialDiagnosticSetupFailureRestoresCreatedFIFO(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
@@ -312,7 +345,7 @@ func TestPartialDiagnosticSetupFailureRestoresCreatedFIFO(t *testing.T) {
 	if err := os.Remove(paths[1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(paths[1], 0700); err != nil {
+	if err := os.Mkdir(paths[1], 0o700); err != nil {
 		t.Fatal(err)
 	}
 	r.mu.Lock()
@@ -330,14 +363,20 @@ func TestPartialDiagnosticSetupFailureRestoresCreatedFIFO(t *testing.T) {
 func TestBooleanOverridesUseGoAccessSpellings(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
 	c.StateDir = filepath.Join(root, "state")
 	c.RuntimeDir = filepath.Join(root, "runtime")
 	c.GoAccessBinary = binary
-	c.Report.ConfigOverrides = map[string]string{"http-method": "true", "http-protocol": "false", "anonymize-ip": "yes", "ignore-crawlers": "no"}
+	c.Report.ConfigOverrides = map[string]string{
+		"http-method":     "true",
+		"http-protocol":   "false",
+		"anonymize-ip":    "yes",
+		"ignore-crawlers": "no",
+	}
 	r, err := New(c)
 	if err != nil {
 		t.Fatal(err)
@@ -346,7 +385,7 @@ func TestBooleanOverridesUseGoAccessSpellings(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		if err := r.Stop(ctx); err != nil {
 			t.Error(err)
@@ -374,11 +413,11 @@ func TestDiagnosticFIFOIsDrainedIntoBoundedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := os.OpenFile(path, os.O_WRONLY, 0600)
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Write([]byte("0123456789abcdefghijklmnop")); err != nil {
+	if _, err := writer.WriteString("0123456789abcdefghijklmnop"); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
@@ -399,7 +438,12 @@ func TestUnreadyChildTimesOutAndIsReaped(t *testing.T) {
 		t.Run(report, func(t *testing.T) {
 			root := t.TempDir()
 			binary := filepath.Join(root, "goaccess")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\ntrap 'exit 0' INT TERM\nwhile :; do sleep .1; done\n"), 0700); err != nil {
+			// #nosec G306 -- test executables need the execute bit.
+			if err := os.WriteFile(
+				binary,
+				[]byte("#!/bin/sh\ntrap 'exit 0' INT TERM\nwhile :; do sleep .1; done\n"),
+				0o700,
+			); err != nil {
 				t.Fatal(err)
 			}
 			c := config.Default()
@@ -416,16 +460,20 @@ func TestUnreadyChildTimesOutAndIsReaped(t *testing.T) {
 			}
 			switch report {
 			case "incomplete":
-				if err := os.WriteFile(r.output, []byte("<html><body>partial"), 0600); err != nil {
+				if err := os.WriteFile(r.output, []byte("<html><body>partial"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "oversize":
-				if err := os.WriteFile(r.output, []byte(strings.Repeat("x", 1025)), 0600); err != nil {
+				if err := os.WriteFile(
+					r.output,
+					[]byte(strings.Repeat("x", 1025)),
+					0o600,
+				); err != nil {
 					t.Fatal(err)
 				}
 			}
 			t.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
 				if err := r.Stop(ctx); err != nil {
 					t.Error(err)
@@ -488,7 +536,11 @@ func TestStartCanceledDoesNotChangeGeneration(t *testing.T) {
 			if got := r.Generation(); got != previous || r.cmd != child {
 				t.Errorf("canceled Start replaced generation %q with %q", previous, got)
 			}
-			if _, err := os.Stat(filepath.Join(r.Config.RuntimeDir, "generations", "canceled-generation")); !os.IsNotExist(err) {
+			if _, err := os.Stat(
+				filepath.Join(r.Config.RuntimeDir, "generations", "canceled-generation"),
+			); !os.IsNotExist(
+				err,
+			) {
 				t.Errorf("canceled Start prepared a generation: %v", err)
 			}
 		})

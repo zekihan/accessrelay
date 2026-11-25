@@ -13,10 +13,11 @@ import (
 	"testing"
 	"time"
 
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
+
 	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/config"
 	"github.com/zekihan/accessrelay/internal/renderer"
-	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
 
 func serviceFixture(t *testing.T) (*collector.Collector, *renderer.Renderer) {
@@ -56,9 +57,12 @@ func TestHandlerRoutes(t *testing.T) {
 		code int
 		body string
 	}{
-		{"/health", 200, "ok\n"}, {"/ready", 503, "initializing\n"},
-		{"/ws", 503, "renderer_unavailable\n"}, {"/", 503, "report_unavailable\n"},
-		{"/index.html", 503, "report_unavailable\n"}, {"/other", 503, "report_unavailable\n"},
+		{"/health", 200, "ok\n"},
+		{"/ready", 503, "initializing\n"},
+		{"/ws", 503, "renderer_unavailable\n"},
+		{"/", 503, "report_unavailable\n"},
+		{"/index.html", 503, "report_unavailable\n"},
+		{"/other", 503, "report_unavailable\n"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			w := request(h, tc.path)
@@ -74,12 +78,15 @@ func TestHandlerRoutes(t *testing.T) {
 	if w.Code != 403 || w.Body.String() != "origin_forbidden\n" {
 		t.Fatalf("origin: %d %q", w.Code, w.Body.String())
 	}
-	if err := os.WriteFile(r.ReportPath(), []byte("<html>report</html>"), 0600); err != nil {
+	if err := os.WriteFile(r.ReportPath(), []byte("<html>report</html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"/", "/index.html"} {
 		w := request(h, path)
-		if w.Code != 200 || w.Body.String() != "<html>report</html>" || w.Header().Get("Content-Type") != "text/html; charset=utf-8" || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		if w.Code != 200 || w.Body.String() != "<html>report</html>" ||
+			w.Header().Get("Content-Type") != "text/html; charset=utf-8" ||
+			w.Header().Get("Cache-Control") != "no-store" ||
+			w.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatalf("%s: %d %v %q", path, w.Code, w.Header(), w.Body.String())
 		}
 	}
@@ -95,10 +102,10 @@ func TestReportServesSameSecondReplacement(t *testing.T) {
 	h := Handler(c, r)
 	const original = "<html>old</html>"
 	const replacement = "<html>new</html>"
-	modTime := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	modTime := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 	writeSnapshot := func(path, body string, modified time.Time) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, modified, modified); err != nil {
@@ -120,7 +127,8 @@ func TestReportServesSameSecondReplacement(t *testing.T) {
 	req.Header.Set("If-Modified-Since", modTime.Format(http.TimeFormat))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || w.Body.String() != replacement || w.Header().Get("Cache-Control") != "no-store" {
+	if w.Code != http.StatusOK || w.Body.String() != replacement ||
+		w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("replacement report: %d %v %q", w.Code, w.Header(), w.Body.String())
 	}
 }
@@ -128,14 +136,17 @@ func TestReportServesSameSecondReplacement(t *testing.T) {
 func TestStatusAndMetricsAreSeparated(t *testing.T) {
 	c, r := serviceFixture(t)
 	h := Handler(c, r)
-	checkStatus := func(stale bool, lag bool) {
+	checkStatus := func(stale, lag bool) {
 		t.Helper()
 		w := request(h, "/status.json")
 		var s collector.Status
 		if err := json.Unmarshal(w.Body.Bytes(), &s); err != nil {
 			t.Fatal(err)
 		}
-		if w.Code != 200 || w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "no-store" || s.Stale != stale || (s.LagSeconds != nil) != lag {
+		if w.Code != 200 || w.Header().Get("Content-Type") != "application/json" ||
+			w.Header().Get("Cache-Control") != "no-store" ||
+			s.Stale != stale ||
+			(s.LagSeconds != nil) != lag {
 			t.Fatalf("status: %d %v %s", w.Code, w.Header(), w.Body.String())
 		}
 		if lag && (*s.LagSeconds < 9 || *s.LagSeconds > 30) {
@@ -156,11 +167,15 @@ func TestStatusAndMetricsAreSeparated(t *testing.T) {
 		}
 	}
 	now := time.Now()
-	_, err := c.Store.DB.Exec(`INSERT INTO metadata(key,value) VALUES('cursor',?),('last_success',?)`, strconv.FormatInt(now.Add(-10*time.Second).UnixNano(), 10), fmt.Sprintf("%.9f", float64(now.UnixNano())/1e9))
+	_, err := c.Store.DB.Exec(
+		`INSERT INTO metadata(key,value) VALUES('cursor',?),('last_success',?)`,
+		strconv.FormatInt(now.Add(-10*time.Second).UnixNano(), 10),
+		fmt.Sprintf("%.9f", float64(now.UnixNano())/1e9),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Refresh(now.Add(-5 * time.Second)); err != nil {
+	if err := c.Refresh(t.Context(), now.Add(-5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	checkStatus(false, true)
@@ -170,11 +185,14 @@ func TestStatusAndMetricsAreSeparated(t *testing.T) {
 		t.Fatalf("metrics lag missing: %q", w.Body.String())
 	}
 	c.Config.Collection.StaleAfter = "1s"
-	_, err = c.Store.DB.Exec(`UPDATE metadata SET value=? WHERE key='last_success'`, fmt.Sprintf("%.9f", float64(now.Add(-10*time.Second).UnixNano())/1e9))
+	_, err = c.Store.DB.Exec(
+		`UPDATE metadata SET value=? WHERE key='last_success'`,
+		fmt.Sprintf("%.9f", float64(now.Add(-10*time.Second).UnixNano())/1e9),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Refresh(now); err != nil {
+	if err := c.Refresh(t.Context(), now); err != nil {
 		t.Fatal(err)
 	}
 	checkStatus(true, true)
@@ -186,7 +204,11 @@ func (f failingReportFile) Stat() (os.FileInfo, error) { return nil, errors.New(
 
 func TestServeReportStatFailure(t *testing.T) {
 	w := httptest.NewRecorder()
-	serveReportFile(w, httptest.NewRequest(http.MethodGet, "/", nil), failingReportFile{strings.NewReader("")})
+	serveReportFile(
+		w,
+		httptest.NewRequest(http.MethodGet, "/", nil),
+		failingReportFile{strings.NewReader("")},
+	)
 	if w.Code != http.StatusServiceUnavailable || w.Body.String() != "report_unavailable\n" {
 		t.Fatalf("stat failure: %d %q", w.Code, w.Body.String())
 	}

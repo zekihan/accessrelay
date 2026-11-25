@@ -21,7 +21,7 @@ func TestLoadDatabaseIntegrityCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			c, err := Load(path)
@@ -30,7 +30,12 @@ func TestLoadDatabaseIntegrityCheck(t *testing.T) {
 					t.Fatalf("got %v, want %s", err, tc.wantError)
 				}
 			} else if err != nil || c.Database.BackgroundIntegrity() != tc.background {
-				t.Fatalf("background=%v err=%v, want %v", c.Database.BackgroundIntegrity(), err, tc.background)
+				t.Fatalf(
+					"background=%v err=%v, want %v",
+					c.Database.BackgroundIntegrity(),
+					err,
+					tc.background,
+				)
 			}
 		})
 	}
@@ -47,7 +52,7 @@ func TestLoadDatabaseSynchronous(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			c, err := Load(path)
@@ -78,7 +83,7 @@ func TestLoadDatabaseMapping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			c, err := Load(path)
@@ -109,7 +114,7 @@ func TestLoadReplayStartup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}}%s}`, tc.setting)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			c, err := Load(path)
@@ -118,7 +123,12 @@ func TestLoadReplayStartup(t *testing.T) {
 					t.Fatalf("got %v, want %s", err, tc.wantError)
 				}
 			} else if err != nil || c.Database.ReplayPrefetch != tc.readers || c.Report.StreamReplay != tc.stream {
-				t.Fatalf("readers=%d stream=%v err=%v", c.Database.ReplayPrefetch, c.Report.StreamReplay, err)
+				t.Fatalf(
+					"readers=%d stream=%v err=%v",
+					c.Database.ReplayPrefetch,
+					c.Report.StreamReplay,
+					err,
+				)
 			}
 		})
 	}
@@ -140,7 +150,7 @@ func TestValidation(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "config.json")
 	for _, raw := range []string{`{"unknown":"value"}`, `{} {}`, `{"collection":{"pollInterval":1}}`} {
-		_ = os.WriteFile(path, []byte(raw), 0600)
+		_ = os.WriteFile(path, []byte(raw), 0o600)
 		if _, e := Load(path); e == nil {
 			t.Fatal(raw)
 		}
@@ -161,8 +171,11 @@ func TestLoadReportWebsocketAuthority(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
-			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}},"report":{"websocketURL":%q}}`, tc.url)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			raw := fmt.Sprintf(
+				`{"collection":{"source":{"cluster":"fixture"}},"report":{"websocketURL":%q}}`,
+				tc.url,
+			)
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := Load(path)
@@ -240,7 +253,12 @@ func TestStateRuntimeDirectorySeparation(t *testing.T) {
 			err := c.Validate()
 			if tc.overlap {
 				if err == nil || err.Error() != "configuration_path_overlap" {
-					t.Fatalf("overlapping state %q and runtime %q: got %v, want configuration_path_overlap", tc.state, tc.runtime, err)
+					t.Fatalf(
+						"overlapping state %q and runtime %q: got %v, want configuration_path_overlap",
+						tc.state,
+						tc.runtime,
+						err,
+					)
 				}
 			} else if err != nil {
 				t.Fatalf("separate directories rejected: %v", err)
@@ -263,12 +281,17 @@ func TestLoadConfigurationSizeBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
-			if err := os.WriteFile(path, []byte(tc.raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(tc.raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			_, err := Load(path)
 			if (err != nil) != tc.wantError {
-				t.Fatalf("Load (%d bytes): error = %v, want error = %v", len(tc.raw), err, tc.wantError)
+				t.Fatalf(
+					"Load (%d bytes): error = %v, want error = %v",
+					len(tc.raw),
+					err,
+					tc.wantError,
+				)
 			}
 		})
 	}
@@ -297,7 +320,7 @@ func TestLoadExcludeRouters(t *testing.T) {
 			}
 			path := filepath.Join(t.TempDir(), "config.json")
 			raw := fmt.Sprintf(`{"collection":{"source":{"cluster":"fixture"}%s}}`, setting)
-			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			c, err := Load(path)

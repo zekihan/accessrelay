@@ -4,7 +4,6 @@ package renderer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -21,6 +20,8 @@ import (
 	"github.com/zekihan/accessrelay/internal/config"
 	"github.com/zekihan/accessrelay/internal/telemetry"
 )
+
+const rendererDiagnosticStorage = "renderer_diagnostic_storage"
 
 type Snapshot struct {
 	Running  bool   `json:"running"`
@@ -49,7 +50,7 @@ type Renderer struct {
 func New(c config.Config) (*Renderer, error) {
 	r := &Renderer{Config: c, backoff: time.Second, initTimeout: 5 * time.Minute}
 	for _, dir := range []string{filepath.Join(c.StateDir, "www"), filepath.Join(c.StateDir, "logs"), c.RuntimeDir} {
-		if os.MkdirAll(dir, 0700) != nil {
+		if os.MkdirAll(dir, 0o700) != nil {
 			return nil, errors.New("renderer_storage")
 		}
 	}
@@ -64,6 +65,7 @@ func New(c config.Config) (*Renderer, error) {
 	}
 	return r, nil
 }
+
 func (r *Renderer) ReportPath() string { return filepath.Join(r.Config.StateDir, "www/report.html") }
 func (r *Renderer) Snapshot() Snapshot { r.mu.Lock(); defer r.mu.Unlock(); return r.status }
 func (r *Renderer) NeedsReplay() bool {
@@ -73,7 +75,10 @@ func (r *Renderer) NeedsReplay() bool {
 }
 func (r *Renderer) Generation() string { r.mu.Lock(); defer r.mu.Unlock(); return r.generation }
 func (r *Renderer) diagnosticPaths() []string {
-	return []string{filepath.Join(r.Config.StateDir, "logs", "unknowns.txt"), filepath.Join(r.Config.StateDir, "logs", "invalid-requests.log")}
+	return []string{
+		filepath.Join(r.Config.StateDir, "logs", "unknowns.txt"),
+		filepath.Join(r.Config.StateDir, "logs", "invalid-requests.log"),
+	}
 }
 
 func (r *Renderer) prepareDiagnosticPath(path string) error {
@@ -98,6 +103,7 @@ func (r *Renderer) prepareDiagnosticPath(path string) error {
 	}
 	return ensureDiagnosticFIFO(path)
 }
+
 func (r *Renderer) Start(ctx context.Context, generation string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -129,7 +135,12 @@ func (r *Renderer) StartFeed(ctx context.Context, generation string, feed *Feed)
 		return err
 	}
 	r.feed = feed
-	r.throttle = startThrottle(r.cmd.Process, r.done, filepath.Join(r.Config.RuntimeDir, "generations", generation, "access.log"), feed)
+	r.throttle = startThrottle(
+		r.cmd.Process,
+		r.done,
+		filepath.Join(r.Config.RuntimeDir, "generations", generation, "access.log"),
+		feed,
+	)
 	return nil
 }
 
@@ -144,27 +155,31 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 		if !childStarted {
 			r.initialization.Finish(false)
 			if r.stopDiagnosticsLocked() != nil {
-				r.status.Error = "renderer_diagnostic_storage"
+				r.status.Error = rendererDiagnosticStorage
 			}
 		}
 	}()
 	for _, path := range r.diagnosticPaths() {
 		if err := r.prepareDiagnosticPath(path); err != nil {
-			r.failedLocked("renderer_diagnostic_storage")
-			return errors.New("renderer_diagnostic_storage")
+			r.failedLocked(rendererDiagnosticStorage)
+			return errors.New(rendererDiagnosticStorage)
 		}
 	}
 	dir := filepath.Join(r.Config.RuntimeDir, "generations", generation)
 	r.output = filepath.Join(dir, "index.html")
-	if os.MkdirAll(filepath.Join(dir, "db"), 0700) != nil {
+	if os.MkdirAll(filepath.Join(dir, "db"), 0o700) != nil {
 		return errors.New("renderer_storage")
 	}
 	browsers := filepath.Join(dir, "browsers.list")
 	conf := filepath.Join(dir, "goaccess.conf")
-	if atomicFile(browsers, []byte(assets.Browsers+strings.Join(r.Config.Report.ExtraBrowsers, "\n")+"\n")) != nil {
+	if atomicFile(
+		browsers,
+		[]byte(assets.Browsers+strings.Join(r.Config.Report.ExtraBrowsers, "\n")+"\n"),
+	) != nil {
 		return errors.New("renderer_storage")
 	}
-	text := strings.NewReplacer("{{WS}}", r.Config.Report.WebsocketURL, "{{DAYS}}", strconv.Itoa(r.Config.Report.HistoryDays), "{{BROWSERS}}", browsers).Replace(assets.Config)
+	text := strings.NewReplacer("{{WS}}", r.Config.Report.WebsocketURL, "{{DAYS}}", strconv.Itoa(r.Config.Report.HistoryDays), "{{BROWSERS}}", browsers).
+		Replace(assets.Config)
 	keys := []string{}
 	for key := range r.Config.Report.ConfigOverrides {
 		keys = append(keys, key)
@@ -182,20 +197,39 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 	if atomicFile(conf, []byte(text)) != nil {
 		return errors.New("renderer_storage")
 	}
-	args := []string{"--no-global-config", "--config-file=" + conf, "--jobs=" + strconv.Itoa(r.Config.Report.Jobs), "--chunk-size=" + strconv.Itoa(r.Config.Report.ChunkSize), "--db-path=" + filepath.Join(dir, "db"), "--pid-file=" + filepath.Join(dir, "child.pid"), "--unknowns-log=" + filepath.Join(r.Config.StateDir, "logs/unknowns.txt"), "--invalid-requests=" + filepath.Join(r.Config.StateDir, "logs/invalid-requests.log"), "--output=" + r.output, filepath.Join(dir, "access.log")}
+	args := []string{
+		"--no-global-config",
+		"--config-file=" + conf,
+		"--jobs=" + strconv.Itoa(r.Config.Report.Jobs),
+		"--chunk-size=" + strconv.Itoa(r.Config.Report.ChunkSize),
+		"--db-path=" + filepath.Join(dir, "db"),
+		"--pid-file=" + filepath.Join(dir, "child.pid"),
+		"--unknowns-log=" + filepath.Join(r.Config.StateDir, "logs/unknowns.txt"),
+		"--invalid-requests=" + filepath.Join(r.Config.StateDir, "logs/invalid-requests.log"),
+		"--output=" + r.output,
+		filepath.Join(dir, "access.log"),
+	}
 	for _, path := range r.diagnosticPaths() {
 		capture, err := startDiagnosticCapture(path, r.Config.Limits.DiagnosticBytes)
 		if err != nil {
-			r.failedLocked("renderer_diagnostic_storage")
-			return errors.New("renderer_diagnostic_storage")
+			r.failedLocked(rendererDiagnosticStorage)
+			return errors.New(rendererDiagnosticStorage)
 		}
 		r.diagnostics = append(r.diagnostics, capture)
 	}
-	cmd := exec.Command(r.Config.GoAccessBinary, args...)
+	// #nosec G204 -- the binary path and args come from operator config, not user input.
+	//nolint:contextcheck // the child must outlive any single caller context.
+	cmd := exec.CommandContext(context.Background(), r.Config.GoAccessBinary, args...)
 	configureChild(cmd)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TZ=UTC", "LANG=C.UTF-8", "HOME=" + r.Config.RuntimeDir, "TMPDIR=" + r.Config.RuntimeDir}
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"TZ=UTC",
+		"LANG=C.UTF-8",
+		"HOME=" + r.Config.RuntimeDir,
+		"TMPDIR=" + r.Config.RuntimeDir,
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -210,7 +244,10 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 	done := r.done
 	go func() {
 		// Completion drives the supervisor state machine, not the exit status.
-		_ = cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			close(done)
+			return
+		}
 		close(done)
 	}()
 	r.status.Running = true
@@ -219,7 +256,9 @@ func (r *Renderer) startLocked(ctx context.Context, generation string) error {
 	r.startedAt = time.Now()
 	// Ownership transfers only after the old child has been reaped and the new child has started.
 	if atomicFile(filepath.Join(r.Config.RuntimeDir, "consumer"), []byte(generation+"\n")) != nil {
-		_ = r.stopLocked(ctx)
+		if stopErr := r.stopLocked(ctx); stopErr != nil {
+			return errors.New("renderer_handoff")
+		}
 		return errors.New("renderer_handoff")
 	}
 	return nil
@@ -244,6 +283,7 @@ func normalizedOverride(key, value string) string {
 	}
 	return value
 }
+
 func (r *Renderer) failedLocked(reason string) {
 	r.initialization.Finish(false)
 	r.cmd = nil
@@ -256,6 +296,7 @@ func (r *Renderer) failedLocked(reason string) {
 	r.retry = time.Now().Add(r.backoff)
 	r.backoff = min(60*time.Second, r.backoff*2)
 }
+
 func (r *Renderer) stopLocked(ctx context.Context) error {
 	r.initialization.Finish(false)
 	// Resume a suspended child so it can handle the interrupt.
@@ -265,11 +306,14 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 	r.feed = nil
 	if r.cmd == nil {
 		if r.stopDiagnosticsLocked() != nil {
-			return errors.New("renderer_diagnostic_storage")
+			return errors.New(rendererDiagnosticStorage)
 		}
 		return nil
 	}
-	_ = r.cmd.Process.Signal(os.Interrupt)
+	if err := r.cmd.Process.Signal(os.Interrupt); err != nil {
+		// The child already exited on its own; the reaper will close done.
+		<-r.done
+	}
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
 	// Shutdown may terminate the child, so its exit error is expected.
@@ -277,14 +321,23 @@ func (r *Renderer) stopLocked(ctx context.Context) error {
 	select {
 	case <-r.done:
 	case <-ctx.Done():
-		_ = r.cmd.Process.Kill()
+		if err := r.cmd.Process.Kill(); err != nil {
+			// The child already exited on its own.
+			<-r.done
+		}
 		<-r.done
 	case <-timer.C:
-		_ = r.cmd.Process.Signal(syscall.SIGTERM)
+		if err := r.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			// The child already exited on its own.
+			<-r.done
+		}
 		select {
 		case <-r.done:
 		case <-time.After(2 * time.Second):
-			_ = r.cmd.Process.Kill()
+			if err := r.cmd.Process.Kill(); err != nil {
+				// The child already exited on its own.
+				<-r.done
+			}
 			<-r.done
 		}
 	}
@@ -352,16 +405,18 @@ func (r *Renderer) stopDiagnosticsLocked() error {
 		}
 	}
 	if failed {
-		r.status.Error = "renderer_diagnostic_storage"
-		return errors.New("renderer_diagnostic_storage")
+		r.status.Error = rendererDiagnosticStorage
+		return errors.New(rendererDiagnosticStorage)
 	}
 	return nil
 }
+
 func (r *Renderer) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopLocked(ctx)
 }
+
 func (r *Renderer) Run(ctx context.Context) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -370,16 +425,17 @@ func (r *Renderer) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.tick()
+			r.tick(ctx)
 		}
 	}
 }
-func (r *Renderer) tick() {
+
+func (r *Renderer) tick(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, capture := range r.diagnostics {
 		if capture.writeError.Load() {
-			r.status.Error = "renderer_diagnostic_storage"
+			r.status.Error = rendererDiagnosticStorage
 		}
 	}
 	if r.cmd == nil {
@@ -390,7 +446,7 @@ func (r *Renderer) tick() {
 		diagnosticErr := r.stopDiagnosticsLocked()
 		r.failedLocked("renderer_exit")
 		if diagnosticErr != nil {
-			r.status.Error = "renderer_diagnostic_storage"
+			r.status.Error = rendererDiagnosticStorage
 		}
 		return
 	default:
@@ -402,7 +458,10 @@ func (r *Renderer) tick() {
 			return
 		}
 		if time.Since(started) >= r.initTimeout {
-			_ = r.stopLocked(context.Background())
+			if stopErr := r.stopLocked(ctx); stopErr != nil {
+				r.failedLocked("renderer_unready")
+				return
+			}
 			r.failedLocked("renderer_unready")
 			return
 		}
@@ -410,7 +469,11 @@ func (r *Renderer) tick() {
 		if err != nil {
 			return
 		}
-		conn, err := net.DialTimeout("tcp", "127.0.0.1:7890", 100*time.Millisecond)
+		conn, err := (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(
+			ctx,
+			"tcp",
+			"127.0.0.1:7890",
+		)
 		if err != nil {
 			return
 		}
@@ -425,7 +488,10 @@ func (r *Renderer) tick() {
 		r.backoff = time.Second
 		// Old diagnostic caches from the Python/shell deployment are derived data.
 		for _, root := range []string{filepath.Join(r.Config.StateDir, "db"), filepath.Join(r.Config.StateDir, "www")} {
-			entries, _ := os.ReadDir(root)
+			entries, readErr := os.ReadDir(root)
+			if readErr != nil {
+				continue
+			}
 			for _, entry := range entries {
 				if entry.IsDir() {
 					_ = os.RemoveAll(filepath.Join(root, entry.Name()))
@@ -457,11 +523,13 @@ func completeFile(path string, limit int64) ([]byte, error) {
 	}
 	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil || int64(len(data)) > limit || !strings.HasSuffix(strings.TrimSpace(string(data)), "</html>") {
+	if err != nil || int64(len(data)) > limit ||
+		!strings.HasSuffix(strings.TrimSpace(string(data)), "</html>") {
 		return nil, errors.New("report_incomplete")
 	}
 	return data, nil
 }
+
 func atomicFile(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".publish-*")
 	if err != nil {
@@ -489,7 +557,7 @@ func atomicFile(path string, data []byte) error {
 	}
 	defer func() { _ = dir.Close() }()
 	if err = dir.Sync(); err != nil {
-		return fmt.Errorf("publication_sync")
+		return errors.New("publication_sync")
 	}
 	return nil
 }

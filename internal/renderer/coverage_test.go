@@ -2,10 +2,10 @@ package renderer
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,10 @@ func bareRenderer(t *testing.T, mutate func(*config.Config)) *Renderer {
 }
 
 func TestNeedsReplayReflectsBackoffAndRunningChild(t *testing.T) {
-	r := bareRenderer(t, func(c *config.Config) { c.GoAccessBinary = filepath.Join(t.TempDir(), "missing") })
+	r := bareRenderer(
+		t,
+		func(c *config.Config) { c.GoAccessBinary = filepath.Join(t.TempDir(), "missing") },
+	)
 	if !r.NeedsReplay() {
 		t.Fatal("idle renderer with no retry deadline should need a replay")
 	}
@@ -70,10 +73,10 @@ func TestNewImportsOnlyCompleteLegacyReport(t *testing.T) {
 			c.RuntimeDir = filepath.Join(root, "runtime")
 			c.Limits.MaxReportBytes = 1024
 			legacy := filepath.Join(c.StateDir, "www/current/index.html")
-			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+			if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(legacy, []byte(tc.legacy), 0600); err != nil {
+			if err := os.WriteFile(legacy, []byte(tc.legacy), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			r, err := New(c)
@@ -82,7 +85,8 @@ func TestNewImportsOnlyCompleteLegacyReport(t *testing.T) {
 			}
 			data, err := os.ReadFile(r.ReportPath())
 			if tc.wantPub {
-				if err != nil || !strings.Contains(string(data), "legacy") || !strings.Contains(string(data), "accessrelay-status") {
+				if err != nil || !strings.Contains(string(data), "legacy") ||
+					!strings.Contains(string(data), "accessrelay-status") {
 					t.Fatalf("published=%q err=%v, want annotated legacy report", data, err)
 				}
 			} else if !os.IsNotExist(err) {
@@ -94,14 +98,17 @@ func TestNewImportsOnlyCompleteLegacyReport(t *testing.T) {
 
 func TestNewKeepsExistingReportAndRejectsUnusableStorage(t *testing.T) {
 	r := bareRenderer(t, nil)
-	if err := os.WriteFile(r.ReportPath(), []byte("<html>current</html>"), 0600); err != nil {
+	if err := os.WriteFile(r.ReportPath(), []byte("<html>current</html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	again, err := New(r.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(again.ReportPath()); err != nil || string(data) != "<html>current</html>" {
+	if data, err := os.ReadFile(
+		again.ReportPath(),
+	); err != nil ||
+		string(data) != "<html>current</html>" {
 		t.Fatalf("report=%q err=%v, want untouched current report", data, err)
 	}
 
@@ -109,10 +116,10 @@ func TestNewKeepsExistingReportAndRejectsUnusableStorage(t *testing.T) {
 	c := config.Default()
 	c.StateDir = filepath.Join(root, "state")
 	c.RuntimeDir = filepath.Join(root, "runtime")
-	if err := os.MkdirAll(c.StateDir, 0700); err != nil {
+	if err := os.MkdirAll(c.StateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(c.StateDir, "www"), []byte("file"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(c.StateDir, "www"), []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := New(c); err == nil || err.Error() != "renderer_storage" {
@@ -135,7 +142,7 @@ func TestCompleteFileBoundaries(t *testing.T) {
 		{"closing not at end", "</html> trailing", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(tc.data), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			data, err := completeFile(path, 1024)
@@ -149,13 +156,13 @@ func TestCompleteFileBoundaries(t *testing.T) {
 	}
 	// Exactly at the limit passes; one byte over fails.
 	exact := "<html>" + strings.Repeat("x", 1024-len("<html></html>")) + "</html>"
-	if err := os.WriteFile(path, []byte(exact), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(exact), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := completeFile(path, 1024); err != nil {
 		t.Fatalf("at-limit report rejected: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(exact+"x"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(exact+"x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := completeFile(path, 1024); err == nil {
@@ -168,7 +175,9 @@ func TestCompleteFileBoundaries(t *testing.T) {
 
 func TestAnnotateInsertsBannerOnce(t *testing.T) {
 	data := annotate([]byte("<html><body>hi</body></html>"))
-	if strings.Count(string(data), `id="accessrelay-status"`) != 1 || !strings.Contains(string(data), "hi</aside>") && !strings.Contains(string(data), "</aside>") {
+	if strings.Count(string(data), `id="accessrelay-status"`) != 1 ||
+		!strings.Contains(string(data), "hi</aside>") &&
+			!strings.Contains(string(data), "</aside>") {
 		t.Fatalf("annotated=%s", data)
 	}
 	if again := annotate(data); string(again) != string(data) {
@@ -178,7 +187,14 @@ func TestAnnotateInsertsBannerOnce(t *testing.T) {
 		t.Fatalf("report without </body> changed: %s", got)
 	}
 	multi := annotate([]byte("<body>a</body><body>b</body>"))
-	if strings.Count(string(multi), "</body>") != 2 || strings.Index(string(multi), "accessrelay-status") > strings.Index(string(multi), "b</body>") {
+	if strings.Count(string(multi), "</body>") != 2 ||
+		strings.Index(
+			string(multi),
+			"accessrelay-status",
+		) > strings.Index(
+			string(multi),
+			"b</body>",
+		) {
 		t.Fatalf("banner not inserted at first </body>: %s", multi)
 	}
 }
@@ -224,7 +240,7 @@ func TestAtomicFileReplacesAndCleansUp(t *testing.T) {
 func TestReadDiagnosticTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "log")
 	content := "0123456789abcdefghijklmnopqrstuvwxyz"
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -252,7 +268,7 @@ func TestReadDiagnosticTail(t *testing.T) {
 // sizes and compares the flushed snapshot against a naive last-N-bytes model.
 func TestDiagnosticRingMatchesTailModel(t *testing.T) {
 	for _, limit := range []int64{1, 7, 16, 64} {
-		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+		t.Run(strconv.FormatInt(limit, 10), func(t *testing.T) {
 			snapshot, err := os.CreateTemp(t.TempDir(), "snapshot")
 			if err != nil {
 				t.Fatal(err)
@@ -262,7 +278,7 @@ func TestDiagnosticRingMatchesTailModel(t *testing.T) {
 			var model []byte
 			seed := uint32(12345)
 			next := func() byte { seed = seed*1664525 + 1013904223; return byte(seed >> 24) }
-			for chunk := 0; chunk < 200; chunk++ {
+			for chunk := range 200 {
 				n := int(next()) % int(3*limit+2)
 				data := make([]byte, n)
 				for i := range data {
@@ -298,18 +314,18 @@ func TestStartDiagnosticCaptureRejectsBadLimitAndCarriesSnapshot(t *testing.T) {
 	if _, err := startDiagnosticCapture(path, 0); err == nil || err.Error() != "diagnostic_limit" {
 		t.Fatalf("err=%v, want diagnostic_limit", err)
 	}
-	if err := os.WriteFile(path+".snapshot", []byte("previous"), 0600); err != nil {
+	if err := os.WriteFile(path+".snapshot", []byte("previous"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	capture, err := startDiagnosticCapture(path, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := os.OpenFile(path, os.O_WRONLY, 0600)
+	writer, err := os.OpenFile(path, os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Write([]byte("+new")); err != nil {
+	if _, err := writer.WriteString("+new"); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
@@ -330,7 +346,7 @@ func TestStartDiagnosticCaptureRejectsBadLimitAndCarriesSnapshot(t *testing.T) {
 func TestEnsureDiagnosticFIFOShapes(t *testing.T) {
 	dir := t.TempDir()
 	regular := filepath.Join(dir, "regular")
-	if err := os.WriteFile(regular, []byte("old"), 0600); err != nil {
+	if err := os.WriteFile(regular, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureDiagnosticFIFO(regular); err != nil {
@@ -343,7 +359,7 @@ func TestEnsureDiagnosticFIFOShapes(t *testing.T) {
 		t.Fatalf("existing FIFO rejected: %v", err)
 	}
 	asDir := filepath.Join(dir, "dir")
-	if err := os.Mkdir(asDir, 0700); err != nil {
+	if err := os.Mkdir(asDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureDiagnosticFIFO(asDir); err == nil || err.Error() != "diagnostic_path" {
@@ -405,7 +421,8 @@ func TestTickMarksReadyWhenWebSocketReachable(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "goaccess")
 	script := "#!/bin/sh\ntrap 'exit 0' INT TERM\nwhile :; do sleep .1; done\n"
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
@@ -420,28 +437,29 @@ func TestTickMarksReadyWhenWebSocketReachable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Stop(t.Context()) })
-	if err := os.WriteFile(r.output, []byte("<html><body>done</body></html>"), 0600); err != nil {
+	if err := os.WriteFile(r.output, []byte("<html><body>done</body></html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Stale derived directories are cleaned once the first report is ready.
 	stale := filepath.Join(c.StateDir, "db", "stale")
-	if err := os.MkdirAll(stale, 0700); err != nil {
+	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r.tick()
+	r.tick(t.Context())
 	snapshot := r.Snapshot()
 	if !snapshot.Ready || !snapshot.Running || snapshot.Error != "" {
 		t.Fatalf("snapshot=%+v, want ready and running", snapshot)
 	}
 	data, err := os.ReadFile(r.ReportPath())
-	if err != nil || !strings.Contains(string(data), "done") || !strings.Contains(string(data), "accessrelay-status") {
+	if err != nil || !strings.Contains(string(data), "done") ||
+		!strings.Contains(string(data), "accessrelay-status") {
 		t.Fatalf("report=%q err=%v", data, err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale derived directory survived readiness: %v", err)
 	}
 	// A second tick leaves a ready renderer alone.
-	r.tick()
+	r.tick(t.Context())
 	if snapshot := r.Snapshot(); !snapshot.Ready {
 		t.Fatalf("ready renderer lost readiness: %+v", snapshot)
 	}
@@ -452,13 +470,13 @@ func TestTickSurfacesDiagnosticWriteErrorWithoutChild(t *testing.T) {
 	capture := &diagnosticCapture{}
 	capture.writeError.Store(true)
 	r.diagnostics = []*diagnosticCapture{capture}
-	r.tick()
+	r.tick(t.Context())
 	if snapshot := r.Snapshot(); snapshot.Error != "renderer_diagnostic_storage" {
 		t.Fatalf("snapshot=%+v, want renderer_diagnostic_storage", snapshot)
 	}
 	r.diagnostics = nil
 	r.status.Error = ""
-	r.tick()
+	r.tick(t.Context())
 	if snapshot := r.Snapshot(); snapshot.Error != "" {
 		t.Fatalf("idle tick changed status: %+v", snapshot)
 	}
@@ -468,13 +486,16 @@ func TestDiagnosticPathShapesBlockStart(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		r := bareRenderer(t, nil)
 		target := filepath.Join(t.TempDir(), "target.txt")
-		if err := os.WriteFile(target, []byte("diag"), 0600); err != nil {
+		if err := os.WriteFile(target, []byte("diag"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(target, r.diagnosticPaths()[0]); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.prepareDiagnosticPath(r.diagnosticPaths()[0]); err == nil || err.Error() != "diagnostic_path" {
+		if err := r.prepareDiagnosticPath(
+			r.diagnosticPaths()[0],
+		); err == nil ||
+			err.Error() != "diagnostic_path" {
 			t.Fatalf("err=%v, want diagnostic_path", err)
 		}
 		if err := r.Stop(t.Context()); err == nil || err.Error() != "renderer_diagnostic_storage" {
@@ -491,13 +512,13 @@ func TestDiagnosticPathShapesBlockStart(t *testing.T) {
 		}
 		r := bareRenderer(t, nil)
 		path := r.diagnosticPaths()[0]
-		if err := os.WriteFile(path, []byte("diag"), 0600); err != nil {
+		if err := os.WriteFile(path, []byte("diag"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(path, 0000); err != nil {
+		if err := os.Chmod(path, 0o000); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(path, 0600) })
+		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
 		if err := r.prepareDiagnosticPath(path); err == nil {
 			t.Fatal("unreadable diagnostic file accepted")
 		}

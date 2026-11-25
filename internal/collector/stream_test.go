@@ -15,6 +15,7 @@ import (
 // have started on it.
 type feedConsumer struct {
 	consumer
+
 	runtime   string
 	feedFail  bool
 	feeds     int
@@ -49,7 +50,22 @@ func streamFixture(t *testing.T, stream bool) (*fixture, *feedConsumer) {
 	f.c.Config.Report.StreamReplay = stream
 	rows := make([]map[string]string, 0, 3000)
 	for i := range 3000 {
-		rows = append(rows, f.row("2026-10-01T00:01:00.123456789Z", strings.Repeat("p", i%7+1)+string(rune('a'+i%26))+string(rune('a'+i/26%26))+string(rune('a'+i/676))))
+		rows = append(
+			rows,
+			f.row(
+				"2026-10-01T00:01:00.123456789Z",
+				strings.Repeat(
+					"p",
+					i%7+1,
+				)+string(
+					rune('a'+i%26),
+				)+string(
+					rune('a'+i/26%26),
+				)+string(
+					rune('a'+i/676),
+				),
+			),
+		)
 	}
 	f.rows = rows
 	f.window(t)
@@ -75,7 +91,7 @@ func TestStreamedReplayStartsConsumerBeforeExportCompletes(t *testing.T) {
 	r.ready = false
 	r.generation = ""
 	f.c.dirty = true
-	if err := f.c.Export(context.Background()); err != nil {
+	if err := f.c.Export(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if r.feeds != 2 {
@@ -91,7 +107,11 @@ func TestStreamedReplayFallsBackWhenFeedCannotStart(t *testing.T) {
 	r := &feedConsumer{runtime: f.config.RuntimeDir, feedFail: true}
 	f.c.Consumer = r
 	f.c.Config.Report.StreamReplay = true
-	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.123456789Z", "a"), f.row("2026-10-01T00:01:00.123456789Z", "b"), f.row("2026-10-01T00:01:00.123456789Z", "c")}
+	f.rows = []map[string]string{
+		f.row("2026-10-01T00:01:00.123456789Z", "a"),
+		f.row("2026-10-01T00:01:00.123456789Z", "b"),
+		f.row("2026-10-01T00:01:00.123456789Z", "c"),
+	}
 	f.window(t)
 	if r.feeds != 1 || r.starts != 1 || f.c.Generation == "" {
 		t.Fatalf("feeds=%d starts=%d generation=%q", r.feeds, r.starts, f.c.Generation)
@@ -112,7 +132,7 @@ func TestStreamedReplayFailureReleasesGeneration(t *testing.T) {
 	// A replay limit just below the export size fails after the consumer started.
 	f.c.Config.Limits.MaxReplayBytes = size - 1
 	f.c.dirty = true
-	if err := f.c.Export(context.Background()); err == nil || err.Error() != "replay_limit" {
+	if err := f.c.Export(t.Context()); err == nil || err.Error() != "replay_limit" {
 		t.Fatalf("err=%v", err)
 	}
 	if r.feeds != 2 || r.stops != stops+2 || r.generation != "" {

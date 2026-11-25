@@ -13,12 +13,17 @@ const purgeScanBatch = 10000
 
 // Put stores a metadata value in its own transaction.
 func (s *Store) Put(key string, value any) error {
-	tx, err := s.DB.Begin()
+	return s.PutContext(context.Background(), key, value)
+}
+
+// PutContext stores a metadata value in its own transaction with the caller context.
+func (s *Store) PutContext(ctx context.Context, key string, value any) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.New("database_transaction")
 	}
 	defer func() { _ = tx.Rollback() }()
-	if put(tx, key, value) != nil || tx.Commit() != nil {
+	if put(ctx, tx, key, value) != nil || tx.Commit() != nil {
 		return errors.New("database_transaction")
 	}
 	return nil
@@ -29,13 +34,29 @@ func (s *Store) Put(key string, value any) error {
 // batches are final, so an interrupted purge resumes by scanning again. Once
 // every event has been checked, key is set to value in the same transaction
 // that removes sources left without events.
-func (s *Store) PurgeEvents(ctx context.Context, match func(string) bool, key string, value any, progress func()) (removed int64, err error) {
+func (s *Store) PurgeEvents(
+	ctx context.Context,
+	match func(string) bool,
+	key string,
+	value any,
+	progress func(),
+) (removed int64, err error) {
 	purge := telemetry.Start("exclusion_purge")
 	defer func() { purge.Finish(err == nil) }()
-	if _, err = s.DB.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", pruneAutocheckpoint)); err != nil {
+	if _, err = s.DB.ExecContext(
+		ctx,
+		fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", pruneAutocheckpoint),
+	); err != nil {
 		return 0, storageError(ctx, "database_transaction")
 	}
-	defer func() { _, _ = s.DB.Exec(`PRAGMA wal_autocheckpoint=1000`) }()
+	defer func() {
+		if _, restoreErr := s.DB.ExecContext(
+			ctx,
+			`PRAGMA wal_autocheckpoint=1000`,
+		); restoreErr != nil {
+			err = storageError(ctx, "database_transaction")
+		}
+	}()
 	var after int64
 	for {
 		ids, last, scanned, err := s.matchingEvents(ctx, after, match)
@@ -70,7 +91,7 @@ func (s *Store) PurgeEvents(ctx context.Context, match func(string) bool, key st
 	if _, err = tx.ExecContext(ctx, deleteUnusedSources); err != nil {
 		return removed, storageError(ctx, "database_transaction")
 	}
-	if err = put(tx, key, value); err != nil {
+	if err = put(ctx, tx, key, value); err != nil {
 		return removed, storageError(ctx, "database_transaction")
 	}
 	if err = tx.Commit(); err != nil {
@@ -82,8 +103,17 @@ func (s *Store) PurgeEvents(ctx context.Context, match func(string) bool, key st
 	return removed, nil
 }
 
-func (s *Store) matchingEvents(ctx context.Context, after int64, match func(string) bool) (ids []any, last int64, scanned int, err error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,message FROM events WHERE id>? ORDER BY id LIMIT ?`, after, purgeScanBatch)
+func (s *Store) matchingEvents(
+	ctx context.Context,
+	after int64,
+	match func(string) bool,
+) (ids []any, last int64, scanned int, err error) {
+	rows, err := s.DB.QueryContext(
+		ctx,
+		`SELECT id,message FROM events WHERE id>? ORDER BY id LIMIT ?`,
+		after,
+		purgeScanBatch,
+	)
 	if err != nil {
 		return nil, 0, 0, storageError(ctx, "database_read")
 	}
@@ -110,6 +140,7 @@ func (s *Store) deleteEvents(ctx context.Context, ids []any) error {
 		return storageError(ctx, "database_transaction")
 	}
 	defer func() { _ = tx.Rollback() }()
+	// #nosec G202 -- the concatenation only repeats the "?" placeholder.
 	query := `DELETE FROM events WHERE id IN(?` + strings.Repeat(",?", len(ids)-1) + `)`
 	if _, err = tx.ExecContext(ctx, query, ids...); err != nil {
 		return storageError(ctx, "database_transaction")

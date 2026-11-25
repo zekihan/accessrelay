@@ -15,7 +15,12 @@ func TestBrowsersListIsWellFormed(t *testing.T) {
 			continue
 		}
 		if strings.Count(line, "\t") != 1 {
-			t.Fatalf("line %d has %d tabs, want exactly one: %q", i+1, strings.Count(line, "\t"), line)
+			t.Fatalf(
+				"line %d has %d tabs, want exactly one: %q",
+				i+1,
+				strings.Count(line, "\t"),
+				line,
+			)
 		}
 		pattern, category, _ := strings.Cut(line, "\t")
 		if pattern == "" || category == "" {

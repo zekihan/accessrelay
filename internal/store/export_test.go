@@ -50,7 +50,14 @@ func TestBufferedReplayPreservesOrderAndMultiplicity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var output replayWriter
-			latest, err := s.Export(t.Context(), &output, tc.after, tc.full, int64(len(tc.want)), nil)
+			latest, err := s.Export(
+				t.Context(),
+				&output,
+				tc.after,
+				tc.full,
+				int64(len(tc.want)),
+				nil,
+			)
 			if err != nil || latest != 3 || output.String() != tc.want {
 				t.Fatalf("latest=%d output=%q err=%v", latest, output.String(), err)
 			}
@@ -137,10 +144,17 @@ func TestIncrementalReplayWritesCompleteLines(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := replayFixture(t)
-			if _, err := s.DB.Exec(`UPDATE events SET message=?, occurrences=? WHERE id=1`, tc.message, tc.copies+1); err != nil {
+			if _, err := s.DB.Exec(
+				`UPDATE events SET message=?, occurrences=? WHERE id=1`,
+				tc.message,
+				tc.copies+1,
+			); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.DB.Exec(`UPDATE changes SET copies=? WHERE seq=3`, tc.copies); err != nil {
+			if _, err := s.DB.Exec(
+				`UPDATE changes SET copies=? WHERE seq=3`,
+				tc.copies,
+			); err != nil {
 				t.Fatal(err)
 			}
 			want := "earlier\nearlier\n" + strings.Repeat(tc.message+"\n", tc.copies)

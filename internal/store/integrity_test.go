@@ -21,7 +21,8 @@ func corruptIndex(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	var root, pageSize int64
-	if err := s.DB.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name='events_time'`).Scan(&root); err != nil {
+	if err := s.DB.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name='events_time'`).
+		Scan(&root); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
@@ -56,13 +57,16 @@ func TestDeferredIntegrityCheck(t *testing.T) {
 		t.Fatal("deferred open:", err)
 	}
 	defer s.Close()
-	if err := s.Verify(context.Background()); err == nil || err.Error() != "database_integrity" {
+	if err := s.Verify(t.Context()); err == nil || err.Error() != "database_integrity" {
 		t.Fatalf("verify: got %v, want database_integrity", err)
 	}
 }
 
 func TestVerifyRunsAlongsideWriter(t *testing.T) {
-	s, err := OpenWithOptions(filepath.Join(t.TempDir(), "state"), Options{MmapBytes: 64 << 20, DeferIntegrity: true})
+	s, err := OpenWithOptions(
+		filepath.Join(t.TempDir(), "state"),
+		Options{MmapBytes: 64 << 20, DeferIntegrity: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,13 +79,13 @@ func TestVerifyRunsAlongsideWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An open write transaction must not block or fail the check.
-	if err := s.Verify(context.Background()); err != nil {
+	if err := s.Verify(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := s.Verify(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled verify: got %v", err)

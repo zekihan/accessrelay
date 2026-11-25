@@ -24,6 +24,16 @@ type diagnosticCapture struct {
 	writeError atomic.Bool
 }
 
+// waitDiagnostic sleeps for d or reports that stop was requested.
+func waitDiagnostic(c *diagnosticCapture, d time.Duration) bool {
+	select {
+	case <-c.stop:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func readDiagnosticTail(f *os.File, limit int64) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
@@ -43,7 +53,7 @@ func startDiagnosticCapture(path string, limit int64) (*diagnosticCapture, error
 		return nil, err
 	}
 	if limit <= 0 {
-		_ = closeDiagnosticFIFO(pipe)
+		closeDiagnosticFIFO(pipe)
 		return nil, errors.New("diagnostic_limit")
 	}
 	snapshotPath := path + ".snapshot"
@@ -53,23 +63,31 @@ func startDiagnosticCapture(path string, limit int64) (*diagnosticCapture, error
 		oldData, copyErr := readDiagnosticTail(old, limit)
 		closeErr := old.Close()
 		if copyErr != nil || closeErr != nil {
-			_ = closeDiagnosticFIFO(pipe)
+			closeDiagnosticFIFO(pipe)
 			return nil, errors.New("diagnostic_snapshot")
 		}
 		copy(buffer, oldData)
 		total = int64(len(oldData))
 	} else if !os.IsNotExist(readErr) {
-		_ = closeDiagnosticFIFO(pipe)
+		closeDiagnosticFIFO(pipe)
 		return nil, readErr
 	}
-	snapshot, err := os.OpenFile(snapshotPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0600)
+	snapshot, err := os.OpenFile(snapshotPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
-		_ = closeDiagnosticFIFO(pipe)
+		closeDiagnosticFIFO(pipe)
 		return nil, err
 	}
 	// Carry forward a bounded previous capture; new diagnostics roll it out as
 	// needed, so the snapshot always contains the newest bytes.
-	c := &diagnosticCapture{pipe: pipe, snapshot: snapshot, limit: limit, buffer: buffer, total: total, done: make(chan struct{}), stop: make(chan struct{})}
+	c := &diagnosticCapture{
+		pipe:     pipe,
+		snapshot: snapshot,
+		limit:    limit,
+		buffer:   buffer,
+		total:    total,
+		done:     make(chan struct{}),
+		stop:     make(chan struct{}),
+	}
 	c.flush()
 	go c.drain()
 	return c, nil
@@ -87,10 +105,7 @@ func (c *diagnosticCapture) append(data []byte) {
 		return
 	}
 	index := int(c.total % capBytes)
-	first := len(data)
-	if first > len(c.buffer)-index {
-		first = len(c.buffer) - index
-	}
+	first := min(len(data), len(c.buffer)-index)
 	copy(c.buffer[index:index+first], data[:first])
 	copy(c.buffer[:len(data)-first], data[first:])
 	c.total += int64(len(data))
@@ -105,18 +120,12 @@ func (c *diagnosticCapture) flush() {
 		c.writeError.Store(true)
 		return
 	}
-	kept := c.total
-	if kept > c.limit {
-		kept = c.limit
-	}
+	kept := min(c.total, c.limit)
 	start := int64(0)
 	if c.total > c.limit {
 		start = c.total % c.limit
 	}
-	first := kept
-	if first > c.limit-start {
-		first = c.limit - start
-	}
+	first := min(kept, c.limit-start)
 	if _, err := c.snapshot.Write(c.buffer[int(start):int(start+first)]); err != nil {
 		c.writeError.Store(true)
 		return
@@ -157,7 +166,9 @@ func (c *diagnosticCapture) drain() {
 					goto done
 				default:
 				}
-				time.Sleep(20 * time.Millisecond)
+				if waitDiagnostic(c, 20*time.Millisecond) {
+					goto done
+				}
 				continue
 			}
 			c.writeError.Store(true)
@@ -167,7 +178,9 @@ func (c *diagnosticCapture) drain() {
 				goto done
 			default:
 			}
-			time.Sleep(20 * time.Millisecond)
+			if waitDiagnostic(c, 20*time.Millisecond) {
+				goto done
+			}
 			continue
 		}
 		if n == 0 {
@@ -175,7 +188,9 @@ func (c *diagnosticCapture) drain() {
 			case <-c.stop:
 				goto done
 			default:
-				time.Sleep(20 * time.Millisecond)
+				if waitDiagnostic(c, 20*time.Millisecond) {
+					goto done
+				}
 			}
 		}
 	}
@@ -199,5 +214,5 @@ func (c *diagnosticCapture) close() {
 	}
 	c.stopOnce.Do(func() { close(c.stop) })
 	<-c.done
-	_ = closeDiagnosticFIFO(c.pipe)
+	closeDiagnosticFIFO(c.pipe)
 }

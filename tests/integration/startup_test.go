@@ -26,7 +26,7 @@ func TestStatusAvailableDuringDatabaseInitialization(t *testing.T) {
 	c.StateDir, c.RuntimeDir = filepath.Join(root, "state"), filepath.Join(root, "runtime")
 	c.ConnectionFile = filepath.Join(root, "missing.json")
 	c.Collection.Source.Cluster = "fixture"
-	if err := os.Mkdir(c.StateDir, 0700); err != nil {
+	if err := os.Mkdir(c.StateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(c.StateDir, "events.sqlite"))
@@ -35,7 +35,9 @@ func TestStatusAvailableDuringDatabaseInitialization(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec(`PRAGMA journal_mode=DELETE; CREATE TABLE blocking(value); BEGIN EXCLUSIVE`); err != nil {
+	if _, err = db.Exec(
+		`PRAGMA journal_mode=DELETE; CREATE TABLE blocking(value); BEGIN EXCLUSIVE`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	defer db.Exec(`ROLLBACK`)
@@ -50,7 +52,7 @@ func TestStatusAvailableDuringDatabaseInitialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "config.json")
-	if err = os.WriteFile(path, raw, 0600); err != nil {
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command(binary, "--config", path)
@@ -68,16 +70,19 @@ func TestStatusAvailableDuringDatabaseInitialization(t *testing.T) {
 			continue
 		}
 		var status struct {
-			Initialized bool
-			Phase       string
-			Renderer    struct{ Ready bool }
+			Initialized bool   `json:"initialized"`
+			Phase       string `json:"phase"`
+			Renderer    struct {
+				Ready bool `json:"ready"`
+			} `json:"renderer"`
 		}
 		err = json.NewDecoder(response.Body).Decode(&status)
 		response.Body.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if response.StatusCode != 200 || status.Initialized || status.Renderer.Ready || status.Phase != "initializing" {
+		if response.StatusCode != http.StatusOK || status.Initialized || status.Renderer.Ready ||
+			status.Phase != "initializing" {
 			t.Fatalf("invalid startup status: %+v", status)
 		}
 		found = true
@@ -92,7 +97,7 @@ func TestStatusAvailableDuringDatabaseInitialization(t *testing.T) {
 			t.Fatal(err)
 		}
 		response.Body.Close()
-		if response.StatusCode != 503 {
+		if response.StatusCode != http.StatusServiceUnavailable {
 			t.Fatalf("%s returned %d during initialization", path, response.StatusCode)
 		}
 	}

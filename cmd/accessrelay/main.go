@@ -12,12 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
+
 	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/config"
 	"github.com/zekihan/accessrelay/internal/renderer"
 	"github.com/zekihan/accessrelay/internal/service"
 	"github.com/zekihan/accessrelay/internal/source"
-	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
 
 var version = "dev"
@@ -28,6 +29,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	path := flag.String("config", "/config/accessrelay.json", "configuration file")
 	validate := flag.Bool("validate", false, "validate configuration and exit")
@@ -47,22 +49,31 @@ func run() error {
 	if *validate {
 		return nil
 	}
-	listener, err := net.Listen("tcp", c.Listen)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", c.Listen)
 	if err != nil {
-		return fmt.Errorf("http_listen")
+		return errors.New("http_listen")
 	}
 	defer func() { _ = listener.Close() }()
 	var metricsListener net.Listener
 	if c.MetricsAddr != "" {
-		metricsListener, err = net.Listen("tcp", c.MetricsAddr)
+		metricsListener, err = (&net.ListenConfig{}).Listen(
+			context.Background(),
+			"tcp",
+			c.MetricsAddr,
+		)
 		if err != nil {
-			return fmt.Errorf("metrics_listen")
+			return errors.New("metrics_listen")
 		}
 		defer func() { _ = metricsListener.Close() }()
 	}
 	startup := service.NewStartupHandler()
 	registry := commonsmetrics.New()
-	server := &http.Server{Handler: registry.Middleware(startup), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
+	server := &http.Server{
+		Handler:           registry.Middleware(startup),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32768,
+	}
 	defer func() { _ = server.Close() }()
 	serving := make(chan error, 1)
 	go func() { serving <- server.Serve(listener) }()
@@ -81,7 +92,12 @@ func run() error {
 	}
 	coll.Consumer = r
 	if metricsListener != nil {
-		metricsServer = &http.Server{Handler: service.MetricsHandler(registry, coll, r), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32768}
+		metricsServer = &http.Server{
+			Handler:           service.MetricsHandler(registry, coll, r),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    32768,
+		}
 		go func() { metricsDone <- metricsServer.Serve(metricsListener) }()
 	} else {
 		close(metricsDone)

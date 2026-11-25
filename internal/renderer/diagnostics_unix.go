@@ -23,7 +23,7 @@ func ensureDiagnosticFIFO(path string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return syscall.Mkfifo(path, 0600)
+	return syscall.Mkfifo(path, 0o600)
 }
 
 func openDiagnosticFIFO(path string) (int, error) {
@@ -39,4 +39,4 @@ func isWouldBlock(err error) bool {
 }
 
 func readDiagnosticFIFO(fd int, buffer []byte) (int, error) { return syscall.Read(fd, buffer) }
-func closeDiagnosticFIFO(fd int) error                      { return syscall.Close(fd) }
+func closeDiagnosticFIFO(fd int) bool                       { return syscall.Close(fd) == nil }

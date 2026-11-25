@@ -16,8 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zekihan/accessrelay/internal/config"
+	// Register the SQLite driver for sql.Open.
 	_ "modernc.org/sqlite"
+
+	"github.com/zekihan/accessrelay/internal/config"
 )
 
 type QueryError struct {
@@ -40,7 +42,18 @@ type Client struct {
 }
 
 func New(c config.Config) *Client {
-	return &Client{Config: c, HTTP: &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: config.Duration(c.Collection.QueryTimeout) + 5*time.Second}, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &Client{
+		Config: c,
+		HTTP: &http.Client{
+			Transport: &http.Transport{
+				Proxy:                 nil,
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: config.Duration(c.Collection.QueryTimeout) + 5*time.Second,
+			},
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
 }
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
 func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, err error) {
@@ -59,25 +72,46 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, queryError("connection_configuration", false)
 	}
 	u, e := url.Parse(connection.URL)
-	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		u.RawQuery != "" ||
+		u.Fragment != "" {
 		return result, queryError("connection_configuration", false)
 	}
 	query := "options(allow_partial_response=false)"
+	var querySb80 strings.Builder
 	for _, field := range [][2]string{{"cluster", c.Config.Collection.Source.Cluster}, {"kubernetes.namespace_name", c.Config.Collection.Source.Namespace}, {"kubernetes.container_name", c.Config.Collection.Source.Container}} {
 		// LogsQL expects Go string literals, including for supplementary Unicode.
-		query += " " + field[0] + ":=" + strconv.Quote(field[1])
+		querySb80.WriteString(" " + field[0] + ":=" + strconv.Quote(field[1]))
 	}
+	query += querySb80.String()
 	query += " | fields _time, _stream_id, kubernetes.pod_id, kubernetes.docker_id, _msg"
-	params := url.Values{"query": {query}, "start": {Timestamp(start)}, "end": {Timestamp(end)}, "timeout": {c.Config.Collection.QueryTimeout}, "allow_partial_response": {"0"}}
-	requestCtx, cancel := context.WithTimeout(ctx, config.Duration(c.Config.Collection.QueryTimeout)+5*time.Second)
+	params := url.Values{
+		"query":                  {query},
+		"start":                  {Timestamp(start)},
+		"end":                    {Timestamp(end)},
+		"timeout":                {c.Config.Collection.QueryTimeout},
+		"allow_partial_response": {"0"},
+	}
+	requestCtx, cancel := context.WithTimeout(
+		ctx,
+		config.Duration(c.Config.Collection.QueryTimeout)+5*time.Second,
+	)
 	defer cancel()
-	req, e := http.NewRequestWithContext(requestCtx, http.MethodPost, strings.TrimRight(connection.URL, "/")+"/select/logsql/query", strings.NewReader(params.Encode()))
+	req, e := http.NewRequestWithContext(
+		requestCtx,
+		http.MethodPost,
+		strings.TrimRight(connection.URL, "/")+"/select/logsql/query",
+		strings.NewReader(params.Encode()),
+	)
 	if e != nil {
 		return result, queryError("connection_configuration", false)
 	}
 	for k, v := range connection.Headers {
 		// Backend credentials cannot override framing or redirect the request.
-		if k == "" || strings.ContainsAny(k, "\r\n :\t") || strings.ContainsAny(v, "\r\n") || strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+		if k == "" || strings.ContainsAny(k, "\r\n :\t") || strings.ContainsAny(v, "\r\n") ||
+			strings.EqualFold(k, "Host") ||
+			strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Transfer-Encoding") {
 			return result, queryError("connection_headers", false)
 		}
 		req.Header.Set(k, v)
@@ -91,7 +125,8 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		split := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusGatewayTimeout
+		split := response.StatusCode == http.StatusRequestTimeout ||
+			response.StatusCode == http.StatusGatewayTimeout
 		if response.StatusCode == http.StatusServiceUnavailable {
 			// VictoriaLogs uses 503 for both query execution and queue deadlines.
 			const deadline = "the request couldn't be executed in "
@@ -101,10 +136,11 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		}
 		return result, queryError("backend_request", split)
 	}
-	if response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity" {
+	if response.Header.Get("Content-Encoding") != "" &&
+		response.Header.Get("Content-Encoding") != "identity" {
 		return result, queryError("response_encoding", false)
 	}
-	if e = os.MkdirAll(c.Config.RuntimeDir, 0700); e != nil {
+	if e = os.MkdirAll(c.Config.RuntimeDir, 0o700); e != nil {
 		return result, errors.New("stage_storage")
 	}
 	f, e := os.CreateTemp(c.Config.RuntimeDir, "window-*.sqlite")
@@ -125,7 +161,10 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 	}
 	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1)
-	if _, e = db.ExecContext(ctx, `CREATE TABLE records(digest BLOB PRIMARY KEY,time_ns INTEGER,source TEXT,message TEXT,copies INTEGER)`); e != nil {
+	if _, e = db.ExecContext(
+		ctx,
+		`CREATE TABLE records(digest BLOB PRIMARY KEY,time_ns INTEGER,source TEXT,message TEXT,copies INTEGER)`,
+	); e != nil {
 		return result, errors.New("stage_storage")
 	}
 	tx, e := db.BeginTx(ctx, nil)
@@ -133,7 +172,10 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, errors.New("stage_storage")
 	}
 	defer func() { _ = tx.Rollback() }()
-	statement, e := tx.PrepareContext(ctx, `INSERT INTO records VALUES(?,?,?,?,1) ON CONFLICT(digest) DO UPDATE SET copies=copies+1`)
+	statement, e := tx.PrepareContext(
+		ctx,
+		`INSERT INTO records VALUES(?,?,?,?,1) ON CONFLICT(digest) DO UPDATE SET copies=copies+1`,
+	)
 	if e != nil {
 		return result, errors.New("stage_storage")
 	}
@@ -146,14 +188,18 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 	for {
 		line, readErr := reader.ReadSlice('\n')
 		result.Bytes += int64(len(line))
-		if len(line) > c.Config.Collection.MaxLineBytes || result.Bytes > c.Config.Collection.MaxWindowBytes {
+		if len(line) > c.Config.Collection.MaxLineBytes ||
+			result.Bytes > c.Config.Collection.MaxWindowBytes {
 			return result, queryError("window_limit", true)
 		}
 		if readErr != nil {
 			if readErr == io.EOF && len(line) == 0 {
 				break
 			}
-			return result, queryError("incomplete_response", !errors.Is(readErr, bufio.ErrBufferFull))
+			return result, queryError(
+				"incomplete_response",
+				!errors.Is(readErr, bufio.ErrBufferFull),
+			)
 		}
 		record, operational, e := Decode(line, start, end)
 		if e != nil {
@@ -167,7 +213,13 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 			result.Excluded++
 			continue
 		}
-		if _, e = statement.ExecContext(ctx, record.Digest[:], record.TimeNS, record.Source, record.Message); e != nil {
+		if _, e = statement.ExecContext(
+			ctx,
+			record.Digest[:],
+			record.TimeNS,
+			record.Source,
+			record.Message,
+		); e != nil {
 			return result, errors.New("stage_storage")
 		}
 	}
