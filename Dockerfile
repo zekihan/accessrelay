@@ -14,6 +14,7 @@ RUN chmod 0644 /goaccess-source.tar.gz && \
     tar -xOf /goaccess-source.tar.gz goaccess-1.12/COPYING > /GoAccess-MIT.txt
 
 FROM docker.io/allinurl/goaccess:1.12@sha256:9e6dfd4abce94bd7c2907c1840b7b35f666587d56b24ffbb930b4782a87ea172
+RUN apk upgrade --no-cache musl musl-utils
 COPY --from=build /accessrelay /accessrelay
 COPY --from=build /goaccess-source.tar.gz /usr/share/accessrelay/goaccess/source-1.12.tar.gz
 COPY --from=build /GoAccess-MIT.txt /usr/share/accessrelay/goaccess/LICENSE
