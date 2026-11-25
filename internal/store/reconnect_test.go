@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -32,15 +31,20 @@ func testReplacementConnection(t *testing.T, mmapBytes int64) {
 	}
 	// Model database/sql discarding a failed physical connection. The SQLite
 	// driver also discards interrupted file-backed connections after cancellation.
-	conn, err := s.DB.Conn(context.Background())
+	conn, err := s.DB.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.Raw(func(any) error { return driver.ErrBadConn }); !errors.Is(err, driver.ErrBadConn) {
+	if err := conn.Raw(
+		func(any) error { return driver.ErrBadConn },
+	); !errors.Is(
+		err,
+		driver.ErrBadConn,
+	) {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
-	if removed, err := s.Prune(context.Background(), 2, nil); err != nil || removed != 1 {
+	if removed, err := s.Prune(t.Context(), 2, nil); err != nil || removed != 1 {
 		t.Fatalf("removed=%d err=%v", removed, err)
 	}
 	var changes int
@@ -67,12 +71,15 @@ func TestSynchronousSurvivesReplacementConnection(t *testing.T) {
 		want    int64
 	}{{"", 2}, {"full", 2}, {"normal", 1}} {
 		t.Run(tc.setting, func(t *testing.T) {
-			s, err := OpenWithOptions(filepath.Join(t.TempDir(), "state"), Options{Synchronous: tc.setting})
+			s, err := OpenWithOptions(
+				filepath.Join(t.TempDir(), "state"),
+				Options{Synchronous: tc.setting},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			conn, err := s.DB.Conn(context.Background())
+			conn, err := s.DB.Conn(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +87,9 @@ func TestSynchronousSurvivesReplacementConnection(t *testing.T) {
 			_ = conn.Close()
 			var mode string
 			var got int64
-			if err := s.DB.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
+			if err := s.DB.QueryRow(`PRAGMA journal_mode`).
+				Scan(&mode); err != nil ||
+				mode != "wal" {
 				t.Fatalf("journal_mode=%q err=%v", mode, err)
 			}
 			if err := s.DB.QueryRow(`PRAGMA synchronous`).Scan(&got); err != nil || got != tc.want {

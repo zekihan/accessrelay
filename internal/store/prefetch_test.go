@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,7 +29,14 @@ func TestReplayPrefetchDoesNotChangeOutput(t *testing.T) {
 	for id := int64(1); id <= 3000; id++ {
 		e := event{time: 1_000_000_000 + (id*7919)%3000*1_000_003, copies: 1 + id%3}
 		events[id] = e
-		if _, err = tx.Exec(`INSERT INTO events VALUES(?,?,?,1,?,?)`, id, fmt.Appendf(nil, "%d", id), e.time, fmt.Sprintf("message %d %s", id, strings.Repeat("x", int(id%200))), e.copies); err != nil {
+		if _, err = tx.Exec(
+			`INSERT INTO events VALUES(?,?,?,1,?,?)`,
+			id,
+			fmt.Appendf(nil, "%d", id),
+			e.time,
+			fmt.Sprintf("message %d %s", id, strings.Repeat("x", int(id%200))),
+			e.copies,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -39,20 +47,29 @@ func TestReplayPrefetchDoesNotChangeOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rows.Next() {
-		var message string
-		var copies int
-		if err = rows.Scan(&message, &copies); err != nil {
+	func() {
+		defer func() {
+			if cerr := rows.Close(); cerr != nil {
+				t.Fatal(cerr)
+			}
+		}()
+		for rows.Next() {
+			var message string
+			var copies int
+			if err = rows.Scan(&message, &copies); err != nil {
+				t.Fatal(err)
+			}
+			want.WriteString(strings.Repeat(message+"\n", copies))
+		}
+		if err = rows.Err(); err != nil {
 			t.Fatal(err)
 		}
-		want.WriteString(strings.Repeat(message+"\n", copies))
-	}
-	_ = rows.Close()
+	}()
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	for _, readers := range []int{0, 1, 4, 16} {
-		t.Run(fmt.Sprint(readers), func(t *testing.T) {
+		t.Run(strconv.Itoa(readers), func(t *testing.T) {
 			s, err := OpenWithOptions(dir, Options{ReplayPrefetch: readers})
 			if err != nil {
 				t.Fatal(err)
@@ -71,7 +88,11 @@ func TestReplayPrefetchDoesNotChangeOutput(t *testing.T) {
 
 func TestReplayPrefetchOptionBounds(t *testing.T) {
 	for _, readers := range []int{-1, 65} {
-		if _, err := OpenWithOptions(filepath.Join(t.TempDir(), "state"), Options{ReplayPrefetch: readers}); err == nil || err.Error() != "configuration_database" {
+		if _, err := OpenWithOptions(
+			filepath.Join(t.TempDir(), "state"),
+			Options{ReplayPrefetch: readers},
+		); err == nil ||
+			err.Error() != "configuration_database" {
 			t.Fatalf("readers=%d err=%v", readers, err)
 		}
 	}

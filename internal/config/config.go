@@ -82,15 +82,54 @@ type Config struct {
 }
 
 func Default() Config {
-	return Config{Listen: ":8080", MetricsAddr: ":9090", StateDir: "/state", RuntimeDir: "/runtime", ConnectionFile: "/connection/connection.json", GoAccessBinary: "goaccess",
-		Collection: Collection{Source: Source{Namespace: "traefik", Container: "traefik"}, PollInterval: "5s", IngestionDelay: "30s", Overlap: "5m", ReconciliationInterval: "1h", BackfillWindow: "5m", MinimumWindow: "1s", QueryTimeout: "20s", StaleAfter: "2m", MaxLineBytes: 1048576, MaxWindowBytes: 268435456},
-		Report:     Report{HistoryDays: 7, Jobs: 6, ChunkSize: 8192, WebsocketURL: "ws://localhost:8080/ws", ConfigOverrides: map[string]string{}},
-		Limits:     Limits{MaxRuntimeBytes: 2684354560, MaxDatabaseBytes: 1610612736, MaxReplayBytes: 1073741824, MaxReportBytes: 67108864, DiagnosticBytes: 8388608, ReserveBytes: 33554432}}
+	return Config{
+		Listen:         ":8080",
+		MetricsAddr:    ":9090",
+		StateDir:       "/state",
+		RuntimeDir:     "/runtime",
+		ConnectionFile: "/connection/connection.json",
+		GoAccessBinary: "goaccess",
+		Collection: Collection{
+			Source:                 Source{Namespace: "traefik", Container: "traefik"},
+			PollInterval:           "5s",
+			IngestionDelay:         "30s",
+			Overlap:                "5m",
+			ReconciliationInterval: "1h",
+			BackfillWindow:         "5m",
+			MinimumWindow:          "1s",
+			QueryTimeout:           "20s",
+			StaleAfter:             "2m",
+			MaxLineBytes:           1048576,
+			MaxWindowBytes:         268435456,
+		},
+		Report: Report{
+			HistoryDays:     7,
+			Jobs:            6,
+			ChunkSize:       8192,
+			WebsocketURL:    "ws://localhost:8080/ws",
+			ConfigOverrides: map[string]string{},
+		},
+		Limits: Limits{
+			MaxRuntimeBytes:  2684354560,
+			MaxDatabaseBytes: 1610612736,
+			MaxReplayBytes:   1073741824,
+			MaxReportBytes:   67108864,
+			DiagnosticBytes:  8388608,
+			ReserveBytes:     33554432,
+		},
+	}
 }
 
 var positiveDuration = regexp.MustCompile(`^[1-9][0-9]*(s|m|h)$`)
 
-func Duration(s string) time.Duration { d, _ := time.ParseDuration(s); return d }
+func Duration(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
 func Load(path string) (Config, error) {
 	c := Default()
 	f, err := os.Open(path)
@@ -117,6 +156,7 @@ func Load(path string) (Config, error) {
 	}
 	return c, c.Validate()
 }
+
 func (c Config) Validate() error {
 	if c.MetricsAddr != "" {
 		_, port, err := net.SplitHostPort(c.MetricsAddr)
@@ -127,7 +167,8 @@ func (c Config) Validate() error {
 			return errors.New("configuration_metrics_address")
 		}
 	}
-	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 || c.Database.ReplayPrefetch < 0 || c.Database.ReplayPrefetch > 64 {
+	if c.Database.MmapBytes < 0 || c.Database.MmapBytes > 2<<30 || c.Database.ReplayPrefetch < 0 ||
+		c.Database.ReplayPrefetch > 64 {
 		return errors.New("configuration_database")
 	}
 	switch c.Database.IntegrityCheck {
@@ -146,10 +187,17 @@ func (c Config) Validate() error {
 			return errors.New("configuration_duration")
 		}
 	}
-	if Duration(c.Collection.MinimumWindow) > Duration(c.Collection.BackfillWindow) || c.Collection.MaxLineBytes < 1024 || c.Collection.MaxLineBytes > 16777216 || c.Collection.MaxWindowBytes < int64(c.Collection.MaxLineBytes) || c.Collection.MaxWindowBytes > 1073741824 {
+	if Duration(c.Collection.MinimumWindow) > Duration(c.Collection.BackfillWindow) ||
+		c.Collection.MaxLineBytes < 1024 ||
+		c.Collection.MaxLineBytes > 16777216 ||
+		c.Collection.MaxWindowBytes < int64(c.Collection.MaxLineBytes) ||
+		c.Collection.MaxWindowBytes > 1073741824 {
 		return errors.New("configuration_window")
 	}
-	if c.Report.HistoryDays < 1 || c.Report.HistoryDays > 366 || c.Report.Jobs < 1 || c.Report.Jobs > 12 || c.Report.ChunkSize < 32 || c.Report.ChunkSize > 1048576 {
+	if c.Report.HistoryDays < 1 || c.Report.HistoryDays > 366 || c.Report.Jobs < 1 ||
+		c.Report.Jobs > 12 ||
+		c.Report.ChunkSize < 32 ||
+		c.Report.ChunkSize > 1048576 {
 		return errors.New("configuration_report")
 	}
 	for _, s := range []string{c.Collection.Source.Cluster, c.Collection.Source.Namespace, c.Collection.Source.Container} {
@@ -175,13 +223,32 @@ func (c Config) Validate() error {
 	state, runtime := filepath.Clean(c.StateDir), filepath.Clean(c.RuntimeDir)
 	// A root directory contains every absolute path; appending another slash
 	// would otherwise turn its containment prefix into "//".
-	if state == string(filepath.Separator) || runtime == string(filepath.Separator) || state == runtime || strings.HasPrefix(runtime, state+"/") || strings.HasPrefix(state, runtime+"/") {
+	if state == string(filepath.Separator) || runtime == string(filepath.Separator) ||
+		state == runtime ||
+		strings.HasPrefix(runtime, state+"/") ||
+		strings.HasPrefix(state, runtime+"/") {
 		return errors.New("configuration_path_overlap")
 	}
 	if !validWebsocketURL(c.Report.WebsocketURL) {
 		return errors.New("configuration_websocket")
 	}
-	allowed := map[string]bool{"agent-list": true, "http-method": true, "http-protocol": true, "anonymize-ip": true, "ignore-crawlers": true, "unknowns-as-crawlers": true, "real-os": true, "with-output-resolver": true, "no-query-string": true, "date-spec": true, "hour-spec": true, "all-static-files": true, "4xx-to-unique-count": true, "double-decode": true, "crawlers-only": true}
+	allowed := map[string]bool{
+		"agent-list":           true,
+		"http-method":          true,
+		"http-protocol":        true,
+		"anonymize-ip":         true,
+		"ignore-crawlers":      true,
+		"unknowns-as-crawlers": true,
+		"real-os":              true,
+		"with-output-resolver": true,
+		"no-query-string":      true,
+		"date-spec":            true,
+		"hour-spec":            true,
+		"all-static-files":     true,
+		"4xx-to-unique-count":  true,
+		"double-decode":        true,
+		"crawlers-only":        true,
+	}
 	for k, v := range c.Report.ConfigOverrides {
 		if !allowed[k] || strings.ContainsAny(v, "\r\n\x00 \t") {
 			return errors.New("configuration_override")
@@ -210,11 +277,17 @@ func (c Config) Validate() error {
 		}
 	}
 	for _, line := range c.Report.ExtraBrowsers {
-		if strings.Count(line, "\t") != 1 || strings.ContainsAny(line, "\r\n\x00") || strings.HasPrefix(line, "#") {
+		if strings.Count(line, "\t") != 1 || strings.ContainsAny(line, "\r\n\x00") ||
+			strings.HasPrefix(line, "#") {
 			return errors.New("configuration_browser")
 		}
 	}
-	if c.Limits.MaxRuntimeBytes < 1048576 || c.Limits.MaxDatabaseBytes < 1048576 || c.Limits.MaxReplayBytes < 1048576 || c.Limits.MaxReportBytes < 1048576 || c.Limits.DiagnosticBytes < 128 || c.Limits.DiagnosticBytes > 67108864 || c.Limits.ReserveBytes < 1048576 {
+	if c.Limits.MaxRuntimeBytes < 1048576 || c.Limits.MaxDatabaseBytes < 1048576 ||
+		c.Limits.MaxReplayBytes < 1048576 ||
+		c.Limits.MaxReportBytes < 1048576 ||
+		c.Limits.DiagnosticBytes < 128 ||
+		c.Limits.DiagnosticBytes > 67108864 ||
+		c.Limits.ReserveBytes < 1048576 {
 		return errors.New("configuration_limits")
 	}
 	return nil

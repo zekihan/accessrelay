@@ -1,7 +1,6 @@
 package source
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -29,10 +28,17 @@ func TestPrecisionCanonicalIdentity(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if !strings.Contains(canonical, `\u30b9`) || !strings.Contains(canonical, `\ud83d\ude00`) || !strings.Contains(canonical, "pod<&>") {
+	if !strings.Contains(canonical, `\u30b9`) || !strings.Contains(canonical, `\ud83d\ude00`) ||
+		!strings.Contains(canonical, "pod<&>") {
 		t.Fatal(canonical)
 	}
-	row := map[string]string{"_time": Timestamp(ns), "_stream_id": "ストリーム", "kubernetes.pod_id": "pod<&>", "kubernetes.docker_id": "😀", "_msg": Line}
+	row := map[string]string{
+		"_time":                Timestamp(ns),
+		"_stream_id":           "ストリーム",
+		"kubernetes.pod_id":    "pod<&>",
+		"kubernetes.docker_id": "😀",
+		"_msg":                 Line,
+	}
 	raw, _ := json.Marshal(row)
 	r, op, e := Decode(raw, ns, ns+1)
 	if e != nil || op || r.Digest != sha256.Sum256([]byte(canonical)) {
@@ -78,13 +84,13 @@ func TestFetchQuotesLogsQLSourceFilters(t *testing.T) {
 	c.RuntimeDir = t.TempDir()
 	c.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
 	connection, _ := json.Marshal(map[string]string{"url": backend.URL})
-	if err := os.WriteFile(c.ConnectionFile, connection, 0600); err != nil {
+	if err := os.WriteFile(c.ConnectionFile, connection, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client := New(c)
 	defer client.Close()
 	start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
-	if _, err := client.Fetch(context.Background(), start, start+1); err != nil {
+	if _, err := client.Fetch(t.Context(), start, start+1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -93,7 +99,11 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	root := t.TempDir()
 	start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
 	end, _ := ParseTimestamp("2026-10-01T00:05:00Z")
-	row := map[string]string{"_time": "2026-10-01T00:01:00.123456789Z", "_stream_id": "a", "_msg": Line}
+	row := map[string]string{
+		"_time":      "2026-10-01T00:01:00.123456789Z",
+		"_stream_id": "a",
+		"_msg":       Line,
+	}
 	raw, _ := json.Marshal(row)
 	body := string(raw) + "\n"
 	code := 200
@@ -108,7 +118,8 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 		}
 		_ = r.ParseForm()
 		query := r.Form.Get("query")
-		if !strings.Contains(query, "allow_partial_response=false") || r.Form.Get("end") != Timestamp(end) {
+		if !strings.Contains(query, "allow_partial_response=false") ||
+			r.Form.Get("end") != Timestamp(end) {
 			t.Error(r.Form)
 		}
 		for _, filter := range []string{
@@ -125,7 +136,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 		if short {
 			n += 10
 		}
-		w.Header().Set("Content-Length", fmt.Sprint(n))
+		w.Header().Set("Content-Length", strconv.Itoa(n))
 		w.WriteHeader(code)
 		_, _ = w.Write([]byte(body))
 	}))
@@ -140,9 +151,14 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	defer client.Close()
 	rotate := func(token string) {
 		dir := filepath.Join(root, token)
-		_ = os.Mkdir(dir, 0700)
-		data, _ := json.Marshal(map[string]any{"url": backend.URL, "headers": map[string]string{"Authorization": token}})
-		_ = os.WriteFile(filepath.Join(dir, "connection.json"), data, 0600)
+		_ = os.Mkdir(dir, 0o700)
+		data, _ := json.Marshal(
+			map[string]any{
+				"url":     backend.URL,
+				"headers": map[string]string{"Authorization": token},
+			},
+		)
+		_ = os.WriteFile(filepath.Join(dir, "connection.json"), data, 0o600)
 		_ = os.Symlink(dir, filepath.Join(root, "..data-next"))
 		_ = os.Rename(filepath.Join(root, "..data-next"), filepath.Join(root, "..data"))
 	}
@@ -150,7 +166,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	_ = os.Symlink("..data/connection.json", c.ConnectionFile)
 	for _, token := range []string{"test-a", "test-b"} {
 		rotate(token)
-		result, e := client.Fetch(context.Background(), start, end)
+		result, e := client.Fetch(t.Context(), start, end)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -161,7 +177,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	}
 	for _, status := range []int{302, 401, 429, 500, 504} {
 		code = status
-		if result, e := client.Fetch(context.Background(), start, end); e == nil {
+		if result, e := client.Fetch(t.Context(), start, end); e == nil {
 			_ = os.Remove(result.Path)
 			t.Fatal("accepted status", status)
 		}
@@ -169,19 +185,19 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 	code = 200
 	for _, invalid := range []string{string(raw), "{bad}\n", "\n", strings.Replace(string(raw), "_stream_id", "_missing", 1) + "\n", strings.Replace(string(raw), "2026-10-01T00:01:00.123456789Z", Timestamp(end), 1) + "\n"} {
 		body = invalid
-		if result, e := client.Fetch(context.Background(), start, end); e == nil {
+		if result, e := client.Fetch(t.Context(), start, end); e == nil {
 			_ = os.Remove(result.Path)
 			t.Fatal("accepted incomplete response")
 		}
 	}
 	body = string(raw) + "\n"
 	short = true
-	if _, e := client.Fetch(context.Background(), start, end); e == nil {
+	if _, e := client.Fetch(t.Context(), start, end); e == nil {
 		t.Fatal("accepted truncated content length")
 	}
 	short = false
 	body = strings.Repeat("x", c.Collection.MaxLineBytes+2) + "\n"
-	if _, e := client.Fetch(context.Background(), start, end); e == nil {
+	if _, e := client.Fetch(t.Context(), start, end); e == nil {
 		t.Fatal("accepted oversized line")
 	}
 	entries, _ := os.ReadDir(c.RuntimeDir)
@@ -192,7 +208,7 @@ func TestCompleteResponsesAndProjectedSecretRotation(t *testing.T) {
 		t.Log(requests)
 	}
 	body = string(raw) + "\n" + string(raw) + "\n"
-	result, e := client.Fetch(context.Background(), start, end)
+	result, e := client.Fetch(t.Context(), start, end)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -228,23 +244,26 @@ func TestFetchClassifiesVictoriaLogsExecutionDeadline(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				http.Error(w, tc.message, http.StatusServiceUnavailable)
-			}))
+			backend := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, tc.message, http.StatusServiceUnavailable)
+				}),
+			)
 			defer backend.Close()
 			c := config.Default()
 			c.RuntimeDir = t.TempDir()
 			c.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
 			connection, _ := json.Marshal(map[string]string{"url": backend.URL})
-			if err := os.WriteFile(c.ConnectionFile, connection, 0600); err != nil {
+			if err := os.WriteFile(c.ConnectionFile, connection, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			client := New(c)
 			defer client.Close()
 			start, _ := ParseTimestamp("2026-10-01T00:00:00Z")
-			_, err := client.Fetch(context.Background(), start, start+1)
+			_, err := client.Fetch(t.Context(), start, start+1)
 			var queryErr *QueryError
-			if !errors.As(err, &queryErr) || queryErr.Reason != "backend_request" || queryErr.Split != tc.split {
+			if !errors.As(err, &queryErr) || queryErr.Reason != "backend_request" ||
+				queryErr.Split != tc.split {
 				t.Fatalf("error = %#v, want backend_request with Split=%t", err, tc.split)
 			}
 		})
@@ -257,7 +276,9 @@ func TestOperationalAndInvalidCLF(t *testing.T) {
 		message     string
 		op, invalid bool
 	}{{"level=info started", true, false}, {strings.Replace(Line, "200 42", "BAD BYTES", 1), false, false}, {strings.Replace(Line, "192.0.2.1", "2001:db8::1", 1) + "\r\n", false, false}, {Line + "\nsecond", false, true}} {
-		raw, _ := json.Marshal(map[string]string{"_time": Timestamp(ns), "_stream_id": "a", "_msg": tc.message})
+		raw, _ := json.Marshal(
+			map[string]string{"_time": Timestamp(ns), "_stream_id": "a", "_msg": tc.message},
+		)
 		_, op, e := Decode(raw, ns, ns+1)
 		if op != tc.op || (e != nil) != tc.invalid {
 			t.Fatal(tc, op, e)
@@ -322,12 +343,12 @@ func TestFetchRejectsInvalidOffsetAfterValidRecord(t *testing.T) {
 	cfg.RuntimeDir = t.TempDir()
 	cfg.ConnectionFile = filepath.Join(t.TempDir(), "connection.json")
 	connection, _ := json.Marshal(map[string]string{"url": backend.URL})
-	if err := os.WriteFile(cfg.ConnectionFile, connection, 0600); err != nil {
+	if err := os.WriteFile(cfg.ConnectionFile, connection, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client := New(cfg)
 	defer client.Close()
-	result, err := client.Fetch(context.Background(), start, end)
+	result, err := client.Fetch(t.Context(), start, end)
 	if err == nil {
 		_ = os.Remove(result.Path)
 		t.Fatal("accepted a window containing an invalid timestamp offset")
@@ -340,7 +361,10 @@ func TestFetchRejectsInvalidOffsetAfterValidRecord(t *testing.T) {
 		t.Fatalf("failed window left stages: %v, %v", entries, err)
 	}
 	// The legal maximum offset remains supported with nanosecond precision.
-	if ns, err := ParseTimestamp("2026-10-01T23:59:00.123456789+23:59"); err != nil || Timestamp(ns) != "2026-10-01T00:00:00.123456789Z" {
+	if ns, err := ParseTimestamp(
+		"2026-10-01T23:59:00.123456789+23:59",
+	); err != nil ||
+		Timestamp(ns) != "2026-10-01T00:00:00.123456789Z" {
 		t.Fatalf("legal offset: %s, %v", Timestamp(ns), err)
 	}
 }

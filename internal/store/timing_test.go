@@ -31,16 +31,25 @@ func TestStoragePhaseDiagnostics(t *testing.T) {
 		t.Fatal("incremental export emitted rebuild logs")
 	}
 	finished := map[string]float64{}
-	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(output.String()), "\n") {
 		var entry map[string]any
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatal(err)
 		}
-		if entry["msg"] == "phase_finish" {
-			if entry["success"] != true || entry["elapsed_seconds"].(float64) < 0 {
+		if entry["msg"] == "Phase_finish" {
+			elapsed, ok := entry["elapsedSeconds"].(float64)
+			if !ok || elapsed < 0 || entry["success"] != true {
 				t.Fatalf("unexpected outcome: %v", entry)
 			}
-			finished[entry["phase"].(string)] = entry["completed"].(float64)
+			phase, ok := entry["phase"].(string)
+			if !ok {
+				t.Fatalf("unexpected outcome: %v", entry)
+			}
+			completed, ok := entry["completed"].(float64)
+			if !ok {
+				t.Fatalf("unexpected outcome: %v", entry)
+			}
+			finished[phase] = completed
 		}
 	}
 	for _, name := range []string{"database_open", "database_integrity", "retention", "retention_delete", "source_cleanup", "retention_checkpoint", "replay_export"} {
@@ -61,7 +70,8 @@ func TestStoragePhaseDiagnostics(t *testing.T) {
 	if _, err := s.Export(t.Context(), failedReplayWriter{}, 0, true, 1<<20, nil); err == nil {
 		t.Fatal("expected flush failure")
 	}
-	if strings.Contains(output.String(), "private filesystem details") || !strings.Contains(output.String(), `"success":false`) {
+	if strings.Contains(output.String(), "private filesystem details") ||
+		!strings.Contains(output.String(), `"success":false`) {
 		t.Fatalf("unsafe or missing failure diagnostic: %s", output.String())
 	}
 	output.Reset()

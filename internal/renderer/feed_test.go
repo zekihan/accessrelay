@@ -54,7 +54,7 @@ func fakeGoAccess(args []string) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if os.WriteFile(output, []byte("<html>"+strconv.Itoa(lines)+"</html>"), 0600) != nil {
+	if os.WriteFile(output, []byte("<html>"+strconv.Itoa(lines)+"</html>"), 0o600) != nil {
 		os.Exit(5)
 	}
 	<-interrupted
@@ -69,7 +69,8 @@ func newFeedRenderer(t *testing.T) (*Renderer, string) {
 	}
 	binary := filepath.Join(root, "goaccess")
 	script := "#!/bin/sh\nACCESSRELAY_FAKE_GOACCESS=1 exec " + executable + " \"$@\"\n"
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Default()
@@ -81,11 +82,11 @@ func newFeedRenderer(t *testing.T) (*Renderer, string) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(c.RuntimeDir, "generations", "feed")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		_ = r.Stop(ctx)
 	})
@@ -113,7 +114,15 @@ func TestReadOffsetThroughSymlinkedRuntime(t *testing.T) {
 	for _, cached := range []int{-1, fd} {
 		gotFD, offset, ok := readOffset(os.Getpid(), path, cached)
 		if !ok || gotFD != fd || offset != int64(n) {
-			t.Fatalf("cached fd %d: readOffset = (%d, %d, %t), want (%d, %d, true)", cached, gotFD, offset, ok, fd, n)
+			t.Fatalf(
+				"cached fd %d: readOffset = (%d, %d, %t), want (%d, %d, true)",
+				cached,
+				gotFD,
+				offset,
+				ok,
+				fd,
+				n,
+			)
 		}
 	}
 }
@@ -147,7 +156,7 @@ func TestFeedKeepsSlowWriterAheadOfRenderer(t *testing.T) {
 		appendLines(t, f, feed, 256)
 		total += 256
 	}
-	r.tick()
+	r.tick(t.Context())
 	if r.Snapshot().Ready {
 		t.Fatal("renderer became ready before the replay was complete")
 	}
@@ -168,7 +177,7 @@ func TestFeedKeepsSlowWriterAheadOfRenderer(t *testing.T) {
 
 func TestStoppingIncompleteFeedPublishesNothing(t *testing.T) {
 	r, path := newFeedRenderer(t)
-	if err := os.WriteFile(path, []byte(strings.Repeat(feedLine, 16)), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Repeat(feedLine, 16)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	feed := NewFeed(1 << 20)
@@ -194,7 +203,7 @@ func TestStoppingIncompleteFeedPublishesNothing(t *testing.T) {
 
 func TestStreamedInitializationDeadlineStartsAtClose(t *testing.T) {
 	r, path := newFeedRenderer(t)
-	if err := os.WriteFile(path, nil, 0600); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r.initTimeout = 50 * time.Millisecond
@@ -203,7 +212,7 @@ func TestStreamedInitializationDeadlineStartsAtClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	r.tick()
+	r.tick(t.Context())
 	if !r.Snapshot().Running {
 		t.Fatal("renderer timed out while its replay was still being written")
 	}

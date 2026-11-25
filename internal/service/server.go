@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -15,13 +16,18 @@ import (
 	"sync"
 	"time"
 
+	commonsmetrics "github.com/zekihan/go-commons/metrics"
+
 	"github.com/zekihan/accessrelay/internal/collector"
 	"github.com/zekihan/accessrelay/internal/renderer"
 	"github.com/zekihan/accessrelay/internal/source"
-	commonsmetrics "github.com/zekihan/go-commons/metrics"
 )
 
-func MetricsHandler(registry *commonsmetrics.Registry, c *collector.Collector, r *renderer.Renderer) http.Handler {
+func MetricsHandler(
+	registry *commonsmetrics.Registry,
+	c *collector.Collector,
+	r *renderer.Renderer,
+) http.Handler {
 	queries := registry.Counter("accessrelay_queries_total", nil)
 	retries := registry.Counter("accessrelay_retries_total", nil)
 	committedWindows := registry.Counter("accessrelay_committed_windows_total", nil)
@@ -34,18 +40,19 @@ func MetricsHandler(registry *commonsmetrics.Registry, c *collector.Collector, r
 	storagePressure := registry.Gauge("accessrelay_storage_pressure", nil)
 	var previous struct {
 		sync.Mutex
+
 		queries, retries, committedWindows, responseBytes, exportFailures, rendererRestarts uint64
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		s := c.Snapshot()
 		rs := r.Snapshot()
 		previous.Lock()
-		queries.Add(int(s.Queries - previous.queries))
-		retries.Add(int(s.Retries - previous.retries))
-		committedWindows.Add(int(s.CommittedWindows - previous.committedWindows))
-		responseBytes.Add(int(s.CommittedBytes - previous.responseBytes))
-		exportFailures.Add(int(s.ExportFailures - previous.exportFailures))
-		rendererRestarts.Add(int(rs.Restarts - previous.rendererRestarts))
+		queries.Add(delta(s.Queries, previous.queries))
+		retries.Add(delta(s.Retries, previous.retries))
+		committedWindows.Add(delta(s.CommittedWindows, previous.committedWindows))
+		responseBytes.Add(delta(s.CommittedBytes, previous.responseBytes))
+		exportFailures.Add(delta(s.ExportFailures, previous.exportFailures))
+		rendererRestarts.Add(delta(rs.Restarts, previous.rendererRestarts))
 		previous.queries, previous.retries = s.Queries, s.Retries
 		previous.committedWindows, previous.responseBytes = s.CommittedWindows, s.CommittedBytes
 		previous.exportFailures, previous.rendererRestarts = s.ExportFailures, rs.Restarts
@@ -73,7 +80,10 @@ func MetricsHandler(registry *commonsmetrics.Registry, c *collector.Collector, r
 }
 
 func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
-	target, _ := url.Parse("http://127.0.0.1:7890")
+	target, err := url.Parse("http://127.0.0.1:7890")
+	if err != nil {
+		panic(err)
+	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorLog = log.New(io.Discard, "", 0)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -96,7 +106,9 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 			http.Error(w, "collector_unresponsive", http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = io.WriteString(w, "ok\n")
+		if _, err := io.WriteString(w, "ok\n"); err != nil {
+			return
+		}
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, req *http.Request) {
 		if !r.Snapshot().Ready || !c.Snapshot().Initialized {
@@ -108,7 +120,8 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 	mux.HandleFunc("/status.json", func(w http.ResponseWriter, _ *http.Request) {
 		s := c.Snapshot()
 		s.Heartbeat = float64(time.Now().UnixNano()) / 1e9
-		s.Stale = s.LastSuccessfulQuery == nil || s.Heartbeat-*s.LastSuccessfulQuery > configStale(c)
+		s.Stale = s.LastSuccessfulQuery == nil ||
+			s.Heartbeat-*s.LastSuccessfulQuery > configStale(c)
 		if s.Cursor != nil {
 			if ns, err := source.ParseTimestamp(*s.Cursor); err == nil {
 				lag := max(0, time.Since(time.Unix(0, ns)).Seconds())
@@ -117,10 +130,13 @@ func Handler(c *collector.Collector, r *renderer.Renderer) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(struct {
+		if err := json.NewEncoder(w).Encode(struct {
 			collector.Status
+
 			Renderer renderer.Snapshot `json:"renderer"`
-		}{s, r.Snapshot()})
+		}{s, r.Snapshot()}); err != nil {
+			return
+		}
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/" && req.URL.Path != "/index.html" {
@@ -161,7 +177,11 @@ type origin struct{ scheme, host, port string }
 
 func parseOrigin(raw string, bare bool) (origin, bool) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Opaque != "" || u.User != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || (bare && (u.Path != "" || u.RawPath != "")) || strings.ContainsAny(raw, "\r\n\t ,") {
+	if err != nil || u.Opaque != "" || u.User != nil || u.Host == "" || u.RawQuery != "" ||
+		u.Fragment != "" ||
+		u.ForceQuery ||
+		(bare && (u.Path != "" || u.RawPath != "")) ||
+		strings.ContainsAny(raw, "\r\n\t ,") {
 		return origin{}, false
 	}
 	scheme := strings.ToLower(u.Scheme)
@@ -199,10 +219,23 @@ func parseOrigin(raw string, bare bool) (origin, bool) {
 	}
 	return origin{scheme: scheme, host: host, port: port}, true
 }
+
+func delta(current, previous uint64) int {
+	d := current - previous
+	if d > uint64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(d)
+}
+
 func configStale(c *collector.Collector) float64 {
-	d, _ := time.ParseDuration(c.Config.Collection.StaleAfter)
+	d, err := time.ParseDuration(c.Config.Collection.StaleAfter)
+	if err != nil {
+		return 0
+	}
 	return d.Seconds()
 }
+
 func serveReport(w http.ResponseWriter, r *http.Request, path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -216,7 +249,8 @@ func serveReport(w http.ResponseWriter, r *http.Request, path string) {
 func serveReportFile(w http.ResponseWriter, r *http.Request, f interface {
 	io.ReadSeeker
 	Stat() (os.FileInfo, error)
-}) {
+},
+) {
 	if _, err := f.Stat(); err != nil {
 		http.Error(w, "report_unavailable", http.StatusServiceUnavailable)
 		return

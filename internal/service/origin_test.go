@@ -31,7 +31,7 @@ func TestTrustedOrigin(t *testing.T) {
 		{"websocket scheme", "wss://report.example", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://internal.invalid/ws", nil)
+			req := httptest.NewRequest(http.MethodGet, "http://internal.invalid/ws", nil)
 			req.Host = "attacker-controlled.invalid"
 			req.Header.Set("Origin", tc.origin)
 			if got := trustedOrigin(req, configured); got != tc.want {
@@ -40,13 +40,13 @@ func TestTrustedOrigin(t *testing.T) {
 		})
 	}
 	t.Run("originless client", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://internal.invalid/ws", nil)
+		req := httptest.NewRequest(http.MethodGet, "http://internal.invalid/ws", nil)
 		if !trustedOrigin(req, configured) {
 			t.Fatal("rejected originless client")
 		}
 	})
 	t.Run("multiple origins", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://internal.invalid/ws", nil)
+		req := httptest.NewRequest(http.MethodGet, "http://internal.invalid/ws", nil)
 		req.Header.Add("Origin", "https://report.example")
 		req.Header.Add("Origin", "https://foreign.example")
 		if trustedOrigin(req, configured) {
@@ -54,7 +54,7 @@ func TestTrustedOrigin(t *testing.T) {
 		}
 	})
 	t.Run("IPv6 and default ports", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://internal.invalid/ws", nil)
+		req := httptest.NewRequest(http.MethodGet, "http://internal.invalid/ws", nil)
 		req.Header.Set("Origin", "https://[2001:db8::1]")
 		if !trustedOrigin(req, "wss://[2001:db8:0::1]:443/custom/path") {
 			t.Fatal("rejected equivalent IPv6 address and default port")
@@ -81,7 +81,11 @@ func TestTrustedOrigin(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
 		if response.Code != http.StatusServiceUnavailable {
-			t.Fatalf("configured Origin status = %d, want readiness %d", response.Code, http.StatusServiceUnavailable)
+			t.Fatalf(
+				"configured Origin status = %d, want readiness %d",
+				response.Code,
+				http.StatusServiceUnavailable,
+			)
 		}
 	})
 }

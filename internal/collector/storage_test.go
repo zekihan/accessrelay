@@ -21,13 +21,19 @@ func TestWindowHonorsSymlinkedRuntimeLimit(t *testing.T) {
 	f.c.Config.Limits.MaxRuntimeBytes = limit
 	f.c.Config.Limits.MaxReplayBytes = limit / 2
 	used := filepath.Join(target, "cache")
-	if err := os.WriteFile(used, make([]byte, limit), 0600); err != nil {
+	if err := os.WriteFile(used, make([]byte, limit), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00Z", "a")}
 
 	start := HistoryStart(f.now, f.config.Report.HistoryDays)
-	if err := f.c.Window(t.Context(), start, start+int64(5*time.Minute), true); err == nil || err.Error() != "runtime_limit" {
+	if err := f.c.Window(
+		t.Context(),
+		start,
+		start+int64(5*time.Minute),
+		true,
+	); err == nil ||
+		err.Error() != "runtime_limit" {
 		t.Fatalf("window at runtime limit = %v, want runtime_limit", err)
 	}
 	if queries := f.c.Snapshot().Queries; queries != 0 {

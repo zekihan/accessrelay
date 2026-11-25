@@ -66,7 +66,7 @@ func writeTestConfig(t *testing.T, mutate func(*config.Config)) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "config.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -94,7 +94,7 @@ func TestRunValidate(t *testing.T) {
 	})
 	t.Run("malformed", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.json")
-		if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, err := runForTest(t, "--config", path, "--validate")
@@ -117,7 +117,10 @@ func TestRunRejectsPositionalArguments(t *testing.T) {
 		{"--version", "unexpected"},
 		{"--config", filepath.Join(t.TempDir(), "absent.json"), "unexpected", "--validate"},
 	} {
-		if _, err := runForTest(t, args...); err == nil || err.Error() != "configuration_arguments" {
+		if _, err := runForTest(
+			t,
+			args...); err == nil ||
+			err.Error() != "configuration_arguments" {
 			t.Fatalf("args=%v err=%v, want configuration_arguments", args, err)
 		}
 	}
@@ -153,7 +156,7 @@ func TestRunStartupStorageFailure(t *testing.T) {
 	})
 	// A directory where SQLite expects its database file makes collector
 	// construction fail after the listener has been bound.
-	if err := os.MkdirAll(filepath.Join(stateDir, "events.sqlite"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(stateDir, "events.sqlite"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runForTest(t, "--config", path); err == nil {
@@ -183,14 +186,23 @@ func TestWaitForShutdownReportsHTTPTimeoutAfterCollectorExit(t *testing.T) {
 
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now())
 	defer cancel()
-	if err := waitForShutdown(ctx, server.Config, nil); err == nil || err.Error() != "shutdown_timeout" {
+	if err := waitForShutdown(
+		ctx,
+		server.Config,
+		nil,
+	); err == nil ||
+		err.Error() != "shutdown_timeout" {
 		t.Fatalf("got %v, want shutdown_timeout with an active request", err)
 	}
 }
 
 func TestWaitForShutdownCollectorOutcome(t *testing.T) {
 	t.Run("collector error wins", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		server := httptest.NewServer(
+			http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
+			),
+		)
 		defer server.Close()
 		done := make(chan error, 1)
 		done <- errCollector
@@ -199,7 +211,11 @@ func TestWaitForShutdownCollectorOutcome(t *testing.T) {
 		}
 	})
 	t.Run("clean collector and http", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		server := httptest.NewServer(
+			http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
+			),
+		)
 		defer server.Close()
 		done := make(chan error, 1)
 		done <- nil
@@ -208,12 +224,21 @@ func TestWaitForShutdownCollectorOutcome(t *testing.T) {
 		}
 	})
 	t.Run("collector never finishes", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		server := httptest.NewServer(
+			http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
+			),
+		)
 		defer server.Close()
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now())
 		defer cancel()
 		done := make(chan error)
-		if err := waitForShutdown(ctx, server.Config, done); err == nil || err.Error() != "shutdown_timeout" {
+		if err := waitForShutdown(
+			ctx,
+			server.Config,
+			done,
+		); err == nil ||
+			err.Error() != "shutdown_timeout" {
 			t.Fatalf("err=%v, want shutdown_timeout", err)
 		}
 	})
@@ -231,7 +256,8 @@ func TestRunServesHTTPAndExitsOnSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(t.TempDir(), "goaccess")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+	// #nosec G306 -- test executables need the execute bit.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path := writeTestConfig(t, func(c *config.Config) {

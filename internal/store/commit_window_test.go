@@ -1,10 +1,9 @@
 package store
 
 import (
-	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,11 +17,20 @@ func openStage(t *testing.T, path string, rows ...stageRow) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.Exec(`CREATE TABLE records(digest BLOB PRIMARY KEY,time_ns INTEGER,source TEXT,message TEXT,copies INTEGER)`); err != nil {
+	if _, err := db.Exec(
+		`CREATE TABLE records(digest BLOB PRIMARY KEY,time_ns INTEGER,source TEXT,message TEXT,copies INTEGER)`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range rows {
-		if _, err := db.Exec(`INSERT INTO records VALUES(?,?,?,?,?)`, row.digest, row.timeNS, row.source, row.message, row.copies); err != nil {
+		if _, err := db.Exec(
+			`INSERT INTO records VALUES(?,?,?,?,?)`,
+			row.digest,
+			row.timeNS,
+			row.source,
+			row.message,
+			row.copies,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,11 +51,17 @@ func TestCommitWindowInitialChangesUsesDigestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.DB.Exec(`INSERT INTO sources(identity) VALUES('fixture'); INSERT INTO events(digest,time_ns,source_id,message,occurrences) VALUES(x'01',1,1,'existing',1)`); err != nil {
+	if _, err := s.DB.Exec(
+		`INSERT INTO sources(identity) VALUES('fixture'); INSERT INTO events(digest,time_ns,source_id,message,occurrences) VALUES(x'01',1,1,'existing',1)`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	stage := filepath.Join(dir, "stage.sqlite")
-	openStage(t, stage, stageRow{digest: []byte{1}, timeNS: 1, source: "fixture", message: "existing", copies: 1})
+	openStage(
+		t,
+		stage,
+		stageRow{digest: []byte{1}, timeNS: 1, source: "fixture", message: "existing", copies: 1},
+	)
 	if _, err := s.DB.Exec(`ATTACH DATABASE ? AS window`, stage); err != nil {
 		t.Fatal(err)
 	}
@@ -56,17 +70,21 @@ func TestCommitWindowInitialChangesUsesDigestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var details []string
-	for rows.Next() {
-		var id, parent, notUsed int
-		var detail string
-		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-			t.Fatal(err)
+	func() {
+		defer func() {
+			if cerr := rows.Close(); cerr != nil {
+				t.Fatal(cerr)
+			}
+		}()
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+				t.Fatal(err)
+			}
+			details = append(details, detail)
 		}
-		details = append(details, detail)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
+	}()
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +108,10 @@ func TestCommitWindowPreservesMultiplicityIdempotenceAndCursor(t *testing.T) {
 	}
 	defer s.Close()
 	const priorGaps = `[{"start":"retained-start","end":"retained-end"}]`
-	if _, err := s.DB.Exec(`INSERT INTO metadata(key,value) VALUES('gaps',?)`, priorGaps); err != nil {
+	if _, err := s.DB.Exec(
+		`INSERT INTO metadata(key,value) VALUES('gaps',?)`,
+		priorGaps,
+	); err != nil {
 		t.Fatal(err)
 	}
 	first := filepath.Join(dir, "first.sqlite")
@@ -98,7 +119,7 @@ func TestCommitWindowPreservesMultiplicityIdempotenceAndCursor(t *testing.T) {
 		stageRow{digest: []byte{1}, timeNS: 10, source: "fixture", message: "one", copies: 3},
 		stageRow{digest: []byte{2}, timeNS: 11, source: "fixture", message: "two", copies: 1},
 	)
-	if err := s.CommitWindow(context.Background(), first, 100, true, 1.0); err != nil {
+	if err := s.CommitWindow(t.Context(), first, 100, true, 1.0); err != nil {
 		t.Fatal(err)
 	}
 	second := filepath.Join(dir, "second.sqlite")
@@ -106,14 +127,15 @@ func TestCommitWindowPreservesMultiplicityIdempotenceAndCursor(t *testing.T) {
 		stageRow{digest: []byte{1}, timeNS: 10, source: "fixture", message: "one", copies: 5},
 		stageRow{digest: []byte{2}, timeNS: 11, source: "fixture", message: "two", copies: 1},
 	)
-	if err := s.CommitWindow(context.Background(), second, 90, true, 2.0); err != nil {
+	if err := s.CommitWindow(t.Context(), second, 90, true, 2.0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CommitWindow(context.Background(), second, 90, true, 3.0); err != nil {
+	if err := s.CommitWindow(t.Context(), second, 90, true, 3.0); err != nil {
 		t.Fatal(err)
 	}
 	var eventCount, copyCount, changeCount int
-	if err := s.DB.QueryRow(`SELECT COUNT(*),SUM(occurrences) FROM events`).Scan(&eventCount, &copyCount); err != nil {
+	if err := s.DB.QueryRow(`SELECT COUNT(*),SUM(occurrences) FROM events`).
+		Scan(&eventCount, &copyCount); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM changes`).Scan(&changeCount); err != nil {
@@ -162,7 +184,7 @@ func TestCommitWindowPreservesMultiplicityIdempotenceAndCursor(t *testing.T) {
 		if err := rows.Scan(&copies); err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, fmt.Sprint(copies))
+		got = append(got, strconv.FormatInt(copies, 10))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)

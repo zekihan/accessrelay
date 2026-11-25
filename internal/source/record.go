@@ -33,16 +33,21 @@ func Excluded(message string, routers map[string]bool) bool {
 	return ok && routers[router]
 }
 
-var stamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
+var stamp = regexp.MustCompile(
+	`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`,
+)
 
 // The inherited Python \S excludes Unicode whitespace and control separators.
-const clfToken = `[^[:space:]\p{Z}\x{85}\x1c-\x1f]+`
+const clfSegment = `[^[:space:]\p{Z}\x{85}\x1c-\x1f]+`
 
-var clf = regexp.MustCompile(`^` + clfToken + ` - ` + clfToken + ` \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `)
+var clf = regexp.MustCompile(
+	`^` + clfSegment + ` - ` + clfSegment + ` \[[^\]\r\n]+\] "(?:[^"\\]|\\.)*" `,
+)
 
 func Timestamp(ns int64) string {
 	return time.Unix(0, ns).UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
+
 func ParseTimestamp(s string) (int64, error) {
 	if !stamp.MatchString(s) {
 		return 0, errors.New("invalid_timestamp")

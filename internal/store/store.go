@@ -13,9 +13,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/zekihan/accessrelay/internal/telemetry"
 	"golang.org/x/sys/unix"
+
+	// Register the SQLite driver for sql.Open.
 	_ "modernc.org/sqlite"
+
+	"github.com/zekihan/accessrelay/internal/telemetry"
 )
 
 const Schema = `
@@ -57,7 +60,8 @@ func Open(dir string) (*Store, error) {
 func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	opening := telemetry.Start("database_open")
 	defer func() { opening.Finish(err == nil) }()
-	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 || options.ReplayPrefetch < 0 || options.ReplayPrefetch > 64 {
+	if options.MmapBytes < 0 || options.MmapBytes > 2<<30 || options.ReplayPrefetch < 0 ||
+		options.ReplayPrefetch > 64 {
 		return nil, errors.New("configuration_database")
 	}
 	synchronous := "FULL"
@@ -68,10 +72,10 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	default:
 		return nil, errors.New("configuration_database")
 	}
-	if err = os.MkdirAll(dir, 0700); err != nil {
+	if err = os.MkdirAll(dir, 0o700); err != nil {
 		return nil, errors.New("state_storage")
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "collector.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := os.OpenFile(filepath.Join(dir, "collector.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, errors.New("writer_lock")
 	}
@@ -98,19 +102,22 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 		return nil, errors.New("database_open")
 	}
 	s.DB.SetMaxOpenConns(1)
-	if err = s.DB.Ping(); err != nil {
+	if err = s.DB.PingContext(context.Background()); err != nil {
 		return s, errors.New("database_open")
 	}
 	var version int
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 0 {
+	if err = s.DB.QueryRowContext(context.Background(), `PRAGMA user_version`).
+		Scan(&version); err != nil ||
+		version != 0 {
 		return s, errors.New("database_format")
 	}
 	var tables int
-	if err = s.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&tables); err != nil {
+	if err = s.DB.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).
+		Scan(&tables); err != nil {
 		return s, errors.New("database_format")
 	}
 	if tables == 0 {
-		if _, err = s.DB.Exec(Schema); err != nil {
+		if _, err = s.DB.ExecContext(context.Background(), Schema); err != nil {
 			return s, errors.New("database_schema")
 		}
 	} else if tables != 4 {
@@ -118,24 +125,33 @@ func OpenWithOptions(dir string, options Options) (s *Store, err error) {
 	}
 	// The inherited schema has user_version 0. No schema rewrite or digest conversion is performed.
 	for table, columns := range map[string]string{"metadata": "key,value", "sources": "id,identity", "events": "id,digest,time_ns,source_id,message,occurrences", "changes": "seq,event_id,copies"} {
-		rows, e := s.DB.Query("SELECT name FROM pragma_table_info(?) ORDER BY cid", table)
+		rows, e := s.DB.QueryContext(
+			context.Background(),
+			"SELECT name FROM pragma_table_info(?) ORDER BY cid",
+			table,
+		)
 		if e != nil {
 			return s, errors.New("database_schema")
 		}
-		names := ""
-		for rows.Next() {
-			var name string
-			if e = rows.Scan(&name); e != nil {
-				_ = rows.Close()
-				return s, errors.New("database_schema")
+		var names string
+		func() {
+			defer func() {
+				if cerr := rows.Close(); cerr != nil {
+					e = cerr
+				}
+			}()
+			for rows.Next() {
+				var name string
+				if e = rows.Scan(&name); e != nil {
+					return
+				}
+				if names != "" {
+					names += ","
+				}
+				names += name
 			}
-			if names != "" {
-				names += ","
-			}
-			names += name
-		}
-		e = rows.Err()
-		_ = rows.Close()
+			e = rows.Err()
+		}()
 		if e != nil || names != columns {
 			return s, errors.New("database_format")
 		}
@@ -179,13 +195,16 @@ func (s *Store) Verify(ctx context.Context) error {
 	db.SetMaxOpenConns(1)
 	return quickCheck(ctx, db)
 }
+
 func (s *Store) Close() error {
 	var err error
 	if s.DB != nil {
 		err = s.DB.Close()
 	}
 	if s.lock != nil {
-		_ = unix.Flock(int(s.lock.Fd()), unix.LOCK_UN)
+		if lockErr := unix.Flock(int(s.lock.Fd()), unix.LOCK_UN); lockErr != nil && err == nil {
+			err = lockErr
+		}
 		if e := s.lock.Close(); err == nil {
 			err = e
 		}
@@ -193,9 +212,15 @@ func (s *Store) Close() error {
 	}
 	return err
 }
+
 func (s *Store) Get(key string, value any) error {
+	return s.GetContext(context.Background(), key, value)
+}
+
+// GetContext reads a metadata value with the caller context.
+func (s *Store) GetContext(ctx context.Context, key string, value any) error {
 	var raw string
-	err := s.DB.QueryRow("SELECT value FROM metadata WHERE key=?", key).Scan(&raw)
+	err := s.DB.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", key).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -207,12 +232,13 @@ func (s *Store) Get(key string, value any) error {
 	}
 	return nil
 }
-func put(tx *sql.Tx, key string, value any) error {
+
+func put(ctx context.Context, tx *sql.Tx, key string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec("INSERT OR REPLACE INTO metadata VALUES(?,?)", key, string(raw))
+	_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO metadata VALUES(?,?)", key, string(raw))
 	return err
 }
 
@@ -224,30 +250,43 @@ type Gap struct {
 const insertInitialChanges = `INSERT INTO changes(event_id,copies) SELECT e.id,e.occurrences FROM window.records r CROSS JOIN events e WHERE e.digest=r.digest AND NOT EXISTS(SELECT 1 FROM changes c WHERE c.event_id=e.id)`
 
 func (s *Store) Gap(start, end string, cursor int64) error {
+	return s.GapContext(context.Background(), start, end, cursor)
+}
+
+// GapContext records a retention gap with the caller context.
+func (s *Store) GapContext(ctx context.Context, start, end string, cursor int64) error {
 	var gaps []Gap
-	if err := s.Get("gaps", &gaps); err != nil {
+	if err := s.GetContext(ctx, "gaps", &gaps); err != nil {
 		return err
 	}
 	if len(gaps) > 19 {
 		gaps = gaps[len(gaps)-19:]
 	}
 	gaps = append(gaps, Gap{start, end})
-	tx, err := s.DB.Begin()
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.New("database_write")
 	}
 	defer func() { _ = tx.Rollback() }()
-	if put(tx, "gaps", gaps) != nil || put(tx, "cursor", cursor) != nil || tx.Commit() != nil {
+	if put(ctx, tx, "gaps", gaps) != nil || put(ctx, tx, "cursor", cursor) != nil ||
+		tx.Commit() != nil {
 		return errors.New("database_write")
 	}
 	return nil
 }
-func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advance bool, success float64) (err error) {
+
+func (s *Store) CommitWindow(
+	ctx context.Context,
+	stage string,
+	end int64,
+	advance bool,
+	success float64,
+) (err error) {
 	if _, err = s.DB.ExecContext(ctx, "ATTACH DATABASE ? AS window", stage); err != nil {
 		return errors.New("database_stage")
 	}
 	defer func() {
-		if _, e := s.DB.Exec("DETACH DATABASE window"); e != nil && err == nil {
+		if _, e := s.DB.ExecContext(ctx, "DETACH DATABASE window"); e != nil && err == nil {
 			err = errors.New("database_detach")
 		}
 	}()
@@ -281,11 +320,11 @@ func (s *Store) CommitWindow(ctx context.Context, stage string, end int64, advan
 		if cursor > end {
 			end = cursor
 		}
-		if e = put(tx, "cursor", end); e != nil {
+		if e = put(ctx, tx, "cursor", end); e != nil {
 			return errors.New("database_transaction")
 		}
 	}
-	if put(tx, "last_success", success) != nil || tx.Commit() != nil {
+	if put(ctx, tx, "last_success", success) != nil || tx.Commit() != nil {
 		return errors.New("database_transaction")
 	}
 	return nil
@@ -302,15 +341,29 @@ const pruneAutocheckpoint = 16384
 // for an unreferenced source, so test the result explicitly.
 const deleteUnusedSources = `DELETE FROM sources WHERE (id IN (SELECT source_id FROM events)) IS NOT TRUE`
 
-func (s *Store) Prune(ctx context.Context, cutoff int64, progress func()) (removed int64, err error) {
+func (s *Store) Prune(
+	ctx context.Context,
+	cutoff int64,
+	progress func(),
+) (removed int64, err error) {
 	retention := telemetry.Start("retention")
 	defer func() { retention.Finish(err == nil) }()
 	deletion := telemetry.Start("retention_delete")
 	defer func() { deletion.Finish(err == nil) }()
-	if _, err = s.DB.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", pruneAutocheckpoint)); err != nil {
+	if _, err = s.DB.ExecContext(
+		ctx,
+		fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", pruneAutocheckpoint),
+	); err != nil {
 		return 0, storageError(ctx, "database_transaction")
 	}
-	defer func() { _, _ = s.DB.Exec(`PRAGMA wal_autocheckpoint=1000`) }()
+	defer func() {
+		if _, restoreErr := s.DB.ExecContext(
+			ctx,
+			`PRAGMA wal_autocheckpoint=1000`,
+		); restoreErr != nil {
+			err = storageError(ctx, "database_transaction")
+		}
+	}()
 	for {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
@@ -365,15 +418,26 @@ func storageError(ctx context.Context, code string) error {
 
 func (s *Store) Counts() (int64, int64, error) {
 	var events, copies int64
-	err := s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(occurrences),0) FROM events`).Scan(&events, &copies)
+	err := s.DB.QueryRowContext(context.Background(), `SELECT COUNT(*),COALESCE(SUM(occurrences),0) FROM events`).
+		Scan(&events, &copies)
 	return events, copies, err
 }
+
 func (s *Store) Latest() (int64, error) {
 	var seq int64
-	err := s.DB.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&seq)
+	err := s.DB.QueryRowContext(context.Background(), `SELECT COALESCE(MAX(seq),0) FROM changes`).
+		Scan(&seq)
 	return seq, err
 }
-func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full bool, maxBytes int64, progress func()) (latest int64, err error) {
+
+func (s *Store) Export(
+	ctx context.Context,
+	output io.Writer,
+	after int64,
+	full bool,
+	maxBytes int64,
+	progress func(),
+) (latest int64, err error) {
 	var replay *telemetry.Phase
 	if full {
 		replay = telemetry.Start("replay_export")
@@ -388,7 +452,8 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 		return 0, storageError(ctx, "export_database")
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&latest); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM changes`).
+		Scan(&latest); err != nil {
 		return 0, storageError(ctx, "export_database")
 	}
 	var rows *sql.Rows
@@ -396,9 +461,16 @@ func (s *Store) Export(ctx context.Context, output io.Writer, after int64, full 
 	if full {
 		prefetch = s.startReplayPrefetch(ctx, s.options.ReplayPrefetch)
 		defer prefetch.stop()
-		rows, err = tx.QueryContext(ctx, `SELECT message,occurrences,time_ns FROM events ORDER BY time_ns,id`)
+		rows, err = tx.QueryContext(
+			ctx,
+			`SELECT message,occurrences,time_ns FROM events ORDER BY time_ns,id`,
+		)
 	} else {
-		rows, err = tx.QueryContext(ctx, `SELECT e.message,c.copies,0 FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`, after)
+		rows, err = tx.QueryContext(
+			ctx,
+			`SELECT e.message,c.copies,0 FROM changes c JOIN events e ON c.event_id=e.id WHERE c.seq>? ORDER BY c.seq`,
+			after,
+		)
 	}
 	if err != nil {
 		return 0, storageError(ctx, "export_database")
@@ -479,7 +551,7 @@ func (s *Store) Size() (int64, error) {
 			continue
 		}
 		if err != nil {
-			return n, fmt.Errorf("database_storage")
+			return n, errors.New("database_storage")
 		}
 		n += f.Size()
 	}

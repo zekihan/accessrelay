@@ -46,8 +46,10 @@ func (s *Store) startReplayPrefetch(ctx context.Context, readers int) *replayPre
 	var pages, pageSize int64
 	// Separate MIN and MAX queries each use a single index descent; combined,
 	// SQLite scans the whole index.
-	if db.QueryRowContext(ctx, `SELECT MIN(time_ns) FROM events`).Scan(&first) != nil || !first.Valid ||
-		db.QueryRowContext(ctx, `SELECT MAX(time_ns) FROM events`).Scan(&last) != nil || !last.Valid ||
+	if db.QueryRowContext(ctx, `SELECT MIN(time_ns) FROM events`).Scan(&first) != nil ||
+		!first.Valid ||
+		db.QueryRowContext(ctx, `SELECT MAX(time_ns) FROM events`).Scan(&last) != nil ||
+		!last.Valid ||
 		db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pages) != nil ||
 		db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize) != nil {
 		_ = db.Close()
@@ -60,9 +62,7 @@ func (s *Store) startReplayPrefetch(ctx context.Context, readers int) *replayPre
 	p.position.Store(first.Int64)
 	var next atomic.Int64
 	for range readers {
-		p.wg.Add(1)
-		go func() {
-			defer p.wg.Done()
+		p.wg.Go(func() {
 			for {
 				chunk := next.Add(1) - 1
 				if chunk >= prefetchChunks {
@@ -80,13 +80,18 @@ func (s *Store) startReplayPrefetch(ctx context.Context, readers int) *replayPre
 					return
 				}
 			}
-		}()
+		})
 	}
 	return p
 }
 
 func (p *replayPrefetch) read(ctx context.Context, start, end int64) error {
-	rows, err := p.db.QueryContext(ctx, `SELECT message FROM events WHERE time_ns>=? AND time_ns<?`, start, end)
+	rows, err := p.db.QueryContext(
+		ctx,
+		`SELECT message FROM events WHERE time_ns>=? AND time_ns<?`,
+		start,
+		end,
+	)
 	if err != nil {
 		return err
 	}

@@ -30,12 +30,14 @@ func (s *StartupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Path == "/status.json" {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"initialized": false, "stale": true, "error": nil,
 			"phase": "initializing", "elapsedSeconds": time.Since(s.started).Seconds(),
 			"heartbeat": float64(time.Now().UnixNano()) / 1e9,
 			"renderer":  map[string]any{"running": false, "ready": false, "restarts": 0},
-		})
+		}); err != nil {
+			return
+		}
 		return
 	}
 	// Keep the startup probe active until database validation has completed.

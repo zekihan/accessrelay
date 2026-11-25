@@ -8,7 +8,9 @@ import (
 
 func indexNames(t *testing.T, s *Store) []string {
 	t.Helper()
-	rows, err := s.DB.Query(`SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	rows, err := s.DB.Query(
+		`SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +40,9 @@ func TestFreshStoreCreatesSourceIndex(t *testing.T) {
 		t.Fatalf("indexes=%v, want %v", got, want)
 	}
 	var column string
-	if err := s.DB.QueryRow(`SELECT name FROM pragma_index_info('events_source')`).Scan(&column); err != nil || column != "source_id" {
+	if err := s.DB.QueryRow(`SELECT name FROM pragma_index_info('events_source')`).
+		Scan(&column); err != nil ||
+		column != "source_id" {
 		t.Fatalf("events_source column=%q err=%v", column, err)
 	}
 }
@@ -70,7 +74,9 @@ func TestSchemaIsIdempotentAndPreservesExistingSourceIndex(t *testing.T) {
 		t.Fatalf("indexes=%v", got)
 	}
 	var occurrences int
-	if err := s.DB.QueryRow(`SELECT occurrences FROM events WHERE id=1`).Scan(&occurrences); err != nil || occurrences != 3 {
+	if err := s.DB.QueryRow(`SELECT occurrences FROM events WHERE id=1`).
+		Scan(&occurrences); err != nil ||
+		occurrences != 3 {
 		t.Fatalf("occurrences=%d err=%v", occurrences, err)
 	}
 }

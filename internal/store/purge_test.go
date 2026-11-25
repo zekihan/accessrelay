@@ -24,19 +24,30 @@ func TestPurgeEventsRemovesMatchesWithChangesAndRecordsMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := 0
-	removed, err := s.PurgeEvents(context.Background(), func(m string) bool { return strings.HasPrefix(m, "drop") }, "excluded_routers", []string{"r"}, func() { progress++ })
+	removed, err := s.PurgeEvents(
+		t.Context(),
+		func(m string) bool { return strings.HasPrefix(m, "drop") },
+		"excluded_routers",
+		[]string{"r"},
+		func() { progress++ },
+	)
 	if err != nil || removed != int64(total/3) || progress == 0 {
 		t.Fatalf("removed=%d progress=%d err=%v", removed, progress, err)
 	}
 	var events, changes, dropped, sources int
-	if err = s.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM events),(SELECT COUNT(*) FROM changes),(SELECT COUNT(*) FROM events WHERE message='drop'),(SELECT COUNT(*) FROM sources)`).Scan(&events, &changes, &dropped, &sources); err != nil {
+	if err = s.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM events),(SELECT COUNT(*) FROM changes),(SELECT COUNT(*) FROM events WHERE message='drop'),(SELECT COUNT(*) FROM sources)`).
+		Scan(&events, &changes, &dropped, &sources); err != nil {
 		t.Fatal(err)
 	}
 	if events != total-total/3 || changes != events || dropped != 0 || sources != 1 {
 		t.Fatalf("events=%d changes=%d dropped=%d sources=%d", events, changes, dropped, sources)
 	}
 	var marker []string
-	if err = s.Get("excluded_routers", &marker); err != nil || len(marker) != 1 || marker[0] != "r" {
+	if err = s.Get(
+		"excluded_routers",
+		&marker,
+	); err != nil || len(marker) != 1 ||
+		marker[0] != "r" {
 		t.Fatalf("marker=%v err=%v", marker, err)
 	}
 	var pages int
@@ -55,9 +66,15 @@ func TestPurgeEventsCancellationLeavesMarkerUnset(t *testing.T) {
 		INSERT INTO events(digest,time_ns,source_id,message,occurrences) VALUES(x'01',1,1,'drop',1)`); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err = s.PurgeEvents(ctx, func(string) bool { return true }, "excluded_routers", []string{"r"}, nil); err == nil {
+	if _, err = s.PurgeEvents(
+		ctx,
+		func(string) bool { return true },
+		"excluded_routers",
+		[]string{"r"},
+		nil,
+	); err == nil {
 		t.Fatal("canceled purge succeeded")
 	}
 	var marker []string

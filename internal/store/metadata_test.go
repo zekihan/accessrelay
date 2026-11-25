@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +42,9 @@ func TestPutGetRoundTripAndMetadataErrors(t *testing.T) {
 	if err := s.Put("bad", make(chan int)); err == nil || err.Error() != "database_transaction" {
 		t.Fatalf("Put unmarshalable: err=%v, want database_transaction", err)
 	}
-	if _, err := s.DB.Exec(`INSERT OR REPLACE INTO metadata VALUES('corrupt','not json')`); err != nil {
+	if _, err := s.DB.Exec(
+		`INSERT OR REPLACE INTO metadata VALUES('corrupt','not json')`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Get("corrupt", &value); err == nil || err.Error() != "database_metadata" {
@@ -58,7 +59,11 @@ func TestGapCapsHistoryAndAdvancesCursor(t *testing.T) {
 	}
 	defer s.Close()
 	for i := 1; i <= 25; i++ {
-		if err := s.Gap(fmt.Sprintf("start-%d", i), fmt.Sprintf("end-%d", i), int64(i)); err != nil {
+		if err := s.Gap(
+			fmt.Sprintf("start-%d", i),
+			fmt.Sprintf("end-%d", i),
+			int64(i),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,10 +160,13 @@ func TestOpenRejectsUnusableState(t *testing.T) {
 	})
 	t.Run("state path is a file", func(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "file")
-		if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Open(filepath.Join(file, "state")); err == nil || err.Error() != "state_storage" {
+		if _, err := Open(
+			filepath.Join(file, "state"),
+		); err == nil ||
+			err.Error() != "state_storage" {
 			t.Fatalf("err=%v, want state_storage", err)
 		}
 	})
@@ -200,7 +208,9 @@ func TestOpenRejectsUnusableState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.DB.Exec(`DROP TABLE metadata; CREATE TABLE metadata(key TEXT PRIMARY KEY, wrong TEXT NOT NULL)`); err != nil {
+		if _, err := s.DB.Exec(
+			`DROP TABLE metadata; CREATE TABLE metadata(key TEXT PRIMARY KEY, wrong TEXT NOT NULL)`,
+		); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Close(); err != nil {
@@ -221,7 +231,14 @@ func TestCommitWindowStageErrors(t *testing.T) {
 	defer s.Close()
 	// A stage path inside a missing directory cannot be attached.
 	missing := filepath.Join(dir, "no-such-dir", "stage.sqlite")
-	if err := s.CommitWindow(t.Context(), missing, 1, true, 1); err == nil || err.Error() != "database_stage" {
+	if err := s.CommitWindow(
+		t.Context(),
+		missing,
+		1,
+		true,
+		1,
+	); err == nil ||
+		err.Error() != "database_stage" {
 		t.Fatalf("missing stage dir: err=%v, want database_stage", err)
 	}
 	// A stage database without the records table fails inside the transaction.
@@ -231,7 +248,14 @@ func TestCommitWindowStageErrors(t *testing.T) {
 	} else if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CommitWindow(t.Context(), empty, 1, true, 1); err == nil || err.Error() != "database_transaction" {
+	if err := s.CommitWindow(
+		t.Context(),
+		empty,
+		1,
+		true,
+		1,
+	); err == nil ||
+		err.Error() != "database_transaction" {
 		t.Fatalf("recordless stage: err=%v, want database_transaction", err)
 	}
 	// Neither failure may advance the cursor.
@@ -252,8 +276,19 @@ func TestCommitWindowRejectsCorruptCursorMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := filepath.Join(dir, "stage.sqlite")
-	openStage(t, stage, stageRow{digest: []byte{1}, timeNS: 10, source: "fixture", message: "one", copies: 1})
-	if err := s.CommitWindow(context.Background(), stage, 100, true, 1); err == nil || err.Error() != "database_metadata" {
+	openStage(
+		t,
+		stage,
+		stageRow{digest: []byte{1}, timeNS: 10, source: "fixture", message: "one", copies: 1},
+	)
+	if err := s.CommitWindow(
+		t.Context(),
+		stage,
+		100,
+		true,
+		1,
+	); err == nil ||
+		err.Error() != "database_metadata" {
 		t.Fatalf("err=%v, want database_metadata", err)
 	}
 	// The whole window rolls back: no event may be committed without its cursor.
@@ -268,13 +303,31 @@ func TestExportRejectsNonPositiveCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out discardWriter
-	if latest, err := s.Export(t.Context(), out, 3, false, 1<<20, nil); latest != 0 || err == nil || err.Error() != "export_database" {
+	if latest, err := s.Export(
+		t.Context(),
+		out,
+		3,
+		false,
+		1<<20,
+		nil,
+	); latest != 0 || err == nil ||
+		err.Error() != "export_database" {
 		t.Fatalf("latest=%d err=%v, want export_database", latest, err)
 	}
-	if _, err := s.DB.Exec(`DELETE FROM changes WHERE seq=4; INSERT INTO changes(seq,event_id,copies) VALUES(4,1,-2)`); err != nil {
+	if _, err := s.DB.Exec(
+		`DELETE FROM changes WHERE seq=4; INSERT INTO changes(seq,event_id,copies) VALUES(4,1,-2)`,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if latest, err := s.Export(t.Context(), out, 3, false, 1<<20, nil); latest != 0 || err == nil || err.Error() != "export_database" {
+	if latest, err := s.Export(
+		t.Context(),
+		out,
+		3,
+		false,
+		1<<20,
+		nil,
+	); latest != 0 || err == nil ||
+		err.Error() != "export_database" {
 		t.Fatalf("negative copies: latest=%d err=%v, want export_database", latest, err)
 	}
 }

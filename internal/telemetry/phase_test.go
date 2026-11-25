@@ -31,11 +31,15 @@ func TestPhaseProgressIsBoundedAndFinishIsFinal(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatal(err)
 		}
-		if entry["phase"] != "replay_export" || entry["msg"] != []string{"phase_start", "phase_progress", "phase_finish"}[i] {
+		if entry["phase"] != "replay_export" ||
+			entry["msg"] != []string{"Phase_start", "Phase_progress", "Phase_finish"}[i] {
 			t.Fatalf("unexpected entry: %v", entry)
 		}
-		if i > 0 && entry["elapsed_seconds"].(float64) < 0 {
-			t.Fatal("negative elapsed time")
+		if i > 0 {
+			elapsed, ok := entry["elapsedSeconds"].(float64)
+			if !ok || elapsed < 0 {
+				t.Fatal("negative elapsed time")
+			}
 		}
 		if i == 1 && entry["completed"] != float64(2000) {
 			t.Fatalf("unexpected progress: %v", entry)
@@ -52,14 +56,14 @@ func TestPhaseProgressOnlyReportsAdvancingWork(t *testing.T) {
 
 	p.lastReport = time.Now().Add(-31 * time.Second)
 	p.Progress(0)
-	if strings.Contains(output.String(), "phase_progress") {
+	if strings.Contains(output.String(), "Phase_progress") {
 		t.Errorf("reported progress before any work: %s", output.String())
 	}
 
 	output.Reset()
 	p.lastReport = time.Now().Add(-31 * time.Second)
 	p.Progress(1000)
-	if !strings.Contains(output.String(), "phase_progress") {
+	if !strings.Contains(output.String(), "Phase_progress") {
 		t.Fatal("missing progress after completing work")
 	}
 

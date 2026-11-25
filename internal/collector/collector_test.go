@@ -38,6 +38,7 @@ func (r *consumer) Start(_ context.Context, g string) error {
 	r.ready = true
 	return nil
 }
+
 func (r *consumer) Stop(_ context.Context) error {
 	r.stops++
 	r.generation = ""
@@ -68,7 +69,7 @@ func newFixture(t *testing.T) *fixture {
 
 func newFixtureWithRuntimeDir(t *testing.T, runtimeDir string) *fixture {
 	t.Helper()
-	f := &fixture{r: &consumer{}, now: time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC)}
+	f := &fixture{r: &consumer{}, now: time.Date(2026, time.October, 1, 0, 10, 0, 0, time.UTC)}
 	f.backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -91,7 +92,7 @@ func newFixtureWithRuntimeDir(t *testing.T, runtimeDir string) *fixture {
 	c.Collection.ReconciliationInterval = "1s"
 	c.Report.HistoryDays = 1
 	raw, _ := json.Marshal(map[string]string{"url": f.backend.URL})
-	_ = os.WriteFile(c.ConnectionFile, raw, 0600)
+	_ = os.WriteFile(c.ConnectionFile, raw, 0o600)
 	f.client = source.New(c)
 	f.config = c
 	var err error
@@ -102,16 +103,30 @@ func newFixtureWithRuntimeDir(t *testing.T, runtimeDir string) *fixture {
 	t.Cleanup(func() { _ = f.c.Store.Close(); f.client.Close(); f.backend.Close() })
 	return f
 }
+
 func (f *fixture) row(stamp, pod string) map[string]string {
-	return map[string]string{"_time": stamp, "_stream_id": "stream-a", "kubernetes.pod_id": pod, "kubernetes.docker_id": "container-a", "_msg": line}
+	return map[string]string{
+		"_time":                stamp,
+		"_stream_id":           "stream-a",
+		"kubernetes.pod_id":    pod,
+		"kubernetes.docker_id": "container-a",
+		"_msg":                 line,
+	}
 }
+
 func (f *fixture) window(t *testing.T) {
 	t.Helper()
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
-	if err := f.c.Window(context.Background(), start, start+5*int64(time.Minute), true); err != nil {
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	if err := f.c.Window(
+		t.Context(),
+		start,
+		start+5*int64(time.Minute),
+		true,
+	); err != nil {
 		t.Fatal(err)
 	}
 }
+
 func (f *fixture) counts(t *testing.T, events, copies int64) {
 	t.Helper()
 	a, b, e := f.c.Store.Counts()
@@ -119,9 +134,12 @@ func (f *fixture) counts(t *testing.T, events, copies int64) {
 		t.Fatal(a, b, e)
 	}
 }
+
 func (f *fixture) replay(t *testing.T) string {
 	t.Helper()
-	data, e := os.ReadFile(filepath.Join(f.config.RuntimeDir, "generations", f.c.Generation, "access.log"))
+	data, e := os.ReadFile(
+		filepath.Join(f.config.RuntimeDir, "generations", f.c.Generation, "access.log"),
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -136,21 +154,30 @@ func TestWindowWithQueryDelimiterInRuntimePath(t *testing.T) {
 	f.window(t)
 	f.counts(t, 1, 2)
 	var cursor int64
-	wantCursor := time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC).UnixNano()
+	wantCursor := time.Date(2026, time.October, 1, 0, 5, 0, 0, time.UTC).UnixNano()
 	if err := f.c.Store.Get("cursor", &cursor); err != nil || cursor != wantCursor {
 		t.Fatalf("cursor = %d, %v; want %d", cursor, err, wantCursor)
 	}
 	if replay := f.replay(t); replay != line+"\n"+line+"\n" {
 		t.Fatalf("replay = %q", replay)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(f.config.RuntimeDir), "runtime")); !os.IsNotExist(err) {
+	if _, err := os.Stat(
+		filepath.Join(filepath.Dir(f.config.RuntimeDir), "runtime"),
+	); !os.IsNotExist(
+		err,
+	) {
 		t.Fatalf("SQLite created a file outside the staging directory: %v", err)
 	}
 }
 
 func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 	f := newFixture(t)
-	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.123456789Z", "a"), f.row("2026-10-01T00:01:00.123456789Z", "a"), f.row("2026-10-01T00:01:00.123456789Z", "b"), f.row("2026-10-01T00:01:00.123456788Z", "a")}
+	f.rows = []map[string]string{
+		f.row("2026-10-01T00:01:00.123456789Z", "a"),
+		f.row("2026-10-01T00:01:00.123456789Z", "a"),
+		f.row("2026-10-01T00:01:00.123456789Z", "b"),
+		f.row("2026-10-01T00:01:00.123456788Z", "a"),
+	}
 	f.window(t)
 	f.window(t)
 	f.counts(t, 3, 4)
@@ -163,10 +190,10 @@ func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 	// Replace the export file with a directory to fail after the authoritative commit.
 	path := filepath.Join(f.config.RuntimeDir, "generations", f.c.Generation, "access.log")
 	_ = os.Remove(path)
-	_ = os.Mkdir(path, 0700)
+	_ = os.Mkdir(path, 0o700)
 	f.rows = append(f.rows, f.rows[0])
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
-	if f.c.Window(context.Background(), start, start+5*int64(time.Minute), true) == nil {
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	if f.c.Window(t.Context(), start, start+5*int64(time.Minute), true) == nil {
 		t.Fatal("export should fail")
 	}
 	f.counts(t, 3, 6)
@@ -174,7 +201,7 @@ func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 		t.Fatal("consumer not stopped after failed export")
 	}
 	f.c.renderRetry = time.Time{}
-	if err := f.c.Export(context.Background()); err != nil {
+	if err := f.c.Export(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.replay(t)) != 6*(len(line)+1) {
@@ -187,7 +214,7 @@ func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = f.c.Export(context.Background()); e != nil {
+	if e = f.c.Export(t.Context()); e != nil {
 		t.Fatal(e)
 	}
 	if f.c.Generation == old || len(f.replay(t)) != 6*(len(line)+1) {
@@ -196,18 +223,21 @@ func TestOverlapMultiplicityRestartAndFailedExport(t *testing.T) {
 	f.window(t)
 	f.counts(t, 3, 6)
 }
+
 func TestTransactionalRollbackAndWriterExclusion(t *testing.T) {
 	f := newFixture(t)
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00Z", "a")}
 	if _, e := New(f.config, f.client, &consumer{}); e == nil {
 		t.Fatal("competing writer accepted")
 	}
-	_, e := f.c.Store.DB.Exec(`CREATE TRIGGER fail_cursor BEFORE INSERT ON metadata BEGIN SELECT RAISE(ABORT,'fixture');END`)
+	_, e := f.c.Store.DB.Exec(
+		`CREATE TRIGGER fail_cursor BEFORE INSERT ON metadata BEGIN SELECT RAISE(ABORT,'fixture');END`,
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
-	if f.c.Window(context.Background(), start, start+5*int64(time.Minute), true) == nil {
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	if f.c.Window(t.Context(), start, start+5*int64(time.Minute), true) == nil {
 		t.Fatal("transaction should fail")
 	}
 	f.counts(t, 0, 0)
@@ -220,11 +250,15 @@ func TestTransactionalRollbackAndWriterExclusion(t *testing.T) {
 	f.window(t)
 	f.counts(t, 1, 1)
 }
+
 func TestRetentionRolloverReconciliationAndGap(t *testing.T) {
 	f := newFixture(t)
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00Z", "a")}
 	for i := range 12 {
-		if _, e := f.c.Tick(context.Background(), f.now.Add(time.Duration(i)*time.Second)); e != nil {
+		if _, e := f.c.Tick(
+			t.Context(),
+			f.now.Add(time.Duration(i)*time.Second),
+		); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -232,14 +266,17 @@ func TestRetentionRolloverReconciliationAndGap(t *testing.T) {
 	f.rows = append(f.rows, f.row("2026-10-01T00:00:01Z", "late"))
 	f.c.timeReconcile = time.Time{}
 	for i := range 12 {
-		if _, e := f.c.Tick(context.Background(), f.now.Add(time.Duration(i+12)*time.Second)); e != nil {
+		if _, e := f.c.Tick(
+			t.Context(),
+			f.now.Add(time.Duration(i+12)*time.Second),
+		); e != nil {
 			t.Fatal(e)
 		}
 	}
 	f.counts(t, 2, 2)
 	old := f.c.Generation
 	next := f.now.AddDate(0, 0, 1)
-	if _, e := f.c.Tick(context.Background(), next); e != nil {
+	if _, e := f.c.Tick(t.Context(), next); e != nil {
 		t.Fatal(e)
 	}
 	f.counts(t, 0, 0)
@@ -258,7 +295,7 @@ func TestRetentionRolloverReconciliationAndGap(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatal(entries)
 	}
-	want := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC).UnixNano()
+	want := time.Date(2026, time.September, 25, 0, 0, 0, 0, time.UTC).UnixNano()
 	if HistoryStart(f.now, 7) != want {
 		t.Fatal("calendar retention")
 	}
@@ -266,6 +303,7 @@ func TestRetentionRolloverReconciliationAndGap(t *testing.T) {
 
 type splitter struct {
 	Backend
+
 	failSecond bool
 	calls      int
 }
@@ -280,14 +318,15 @@ func (s *splitter) Fetch(ctx context.Context, start, end int64) (source.Result, 
 	}
 	return s.Backend.Fetch(ctx, start, end)
 }
+
 func TestTimeoutSplitDoesNotAdvancePastFailedHalf(t *testing.T) {
 	f := newFixture(t)
 	f.rows = []map[string]string{f.row("2026-10-01T00:00:01Z", "a")}
 	split := &splitter{Backend: f.client, failSecond: true}
 	f.c.Backend = split
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 	end := start + 4*int64(time.Second)
-	if e := f.c.Window(context.Background(), start, end, true); e == nil {
+	if e := f.c.Window(t.Context(), start, end, true); e == nil {
 		t.Fatal("second half should fail")
 	}
 	var cursor int64
@@ -297,7 +336,7 @@ func TestTimeoutSplitDoesNotAdvancePastFailedHalf(t *testing.T) {
 	}
 	f.counts(t, 1, 1)
 	split.failSecond = false
-	if e := f.c.Window(context.Background(), start, end, true); e != nil {
+	if e := f.c.Window(t.Context(), start, end, true); e != nil {
 		t.Fatal(e)
 	}
 	f.counts(t, 1, 1)
@@ -306,9 +345,10 @@ func TestTimeoutSplitDoesNotAdvancePastFailedHalf(t *testing.T) {
 		t.Fatal(cursor)
 	}
 }
+
 func TestEmptyBootStorageBoundAndRendererFailure(t *testing.T) {
 	f := newFixture(t)
-	if _, e := f.c.Tick(context.Background(), f.now); e != nil {
+	if _, e := f.c.Tick(t.Context(), f.now); e != nil {
 		t.Fatal(e)
 	}
 	f.counts(t, 0, 0)
@@ -317,22 +357,25 @@ func TestEmptyBootStorageBoundAndRendererFailure(t *testing.T) {
 	}
 	f.config.Limits.MaxDatabaseBytes = 1
 	f.c.Config = f.config
-	if err := f.c.checkStorage(); err == nil || err.Error() != "database_limit" {
+	if err := f.c.checkStorage(
+		t.Context(),
+	); err == nil ||
+		err.Error() != "database_limit" {
 		t.Fatal("database limit missing from direct storage check")
 	}
 	f.c.Config.Limits.MaxDatabaseBytes = 1610612736
 	f.r.fail = true
 	f.c.dirty = true
-	if f.c.Export(context.Background()) == nil {
+	if f.c.Export(t.Context()) == nil {
 		t.Fatal("renderer failure ignored")
 	}
 	starts := f.r.starts
-	if f.c.Export(context.Background()) == nil || f.r.starts != starts {
+	if f.c.Export(t.Context()) == nil || f.r.starts != starts {
 		t.Fatal("renderer retry was not throttled", f.r.starts, starts)
 	}
 	f.r.fail = false
 	f.c.renderRetry = time.Time{}
-	if err := f.c.Export(context.Background()); err != nil {
+	if err := f.c.Export(t.Context()); err != nil {
 		t.Fatal("renderer did not recover after retry deadline:", err)
 	}
 	if !f.c.Healthy(time.Now().Add(60 * time.Second)) {
@@ -350,32 +393,44 @@ func TestDatabaseBudgetAllowsReusingPrunedPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := strings.Repeat("x", 2000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		digest := []byte{byte(i >> 8), byte(i)}
-		if _, err := f.c.Store.DB.Exec(`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,0,?,1)`, digest, message); err != nil {
+		if _, err := f.c.Store.DB.Exec(
+			`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,0,?,1)`,
+			digest,
+			message,
+		); err != nil {
 			break
 		}
 	}
 	var pageCount int64
-	if err := f.c.Store.DB.QueryRow(`PRAGMA page_count`).Scan(&pageCount); err != nil || pageCount == 0 {
+	if err := f.c.Store.DB.QueryRow(`PRAGMA page_count`).
+		Scan(&pageCount); err != nil ||
+		pageCount == 0 {
 		t.Fatal(pageCount, err)
 	}
 	f.c.Config.Limits.MaxDatabaseBytes = pageCount * pageSize
-	if _, err := f.c.Store.Prune(context.Background(), 1, nil); err != nil {
+	if _, err := f.c.Store.Prune(t.Context(), 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	var freelist int64
-	if err := f.c.Store.DB.QueryRow(`PRAGMA freelist_count`).Scan(&freelist); err != nil || freelist == 0 {
+	if err := f.c.Store.DB.QueryRow(`PRAGMA freelist_count`).
+		Scan(&freelist); err != nil ||
+		freelist == 0 {
 		t.Fatal(freelist, err)
 	}
 	physical, err := f.c.Store.Size()
 	if err != nil || physical < f.c.Config.Limits.MaxDatabaseBytes {
 		t.Fatal(physical, err)
 	}
-	if err = f.c.checkStorage(); err != nil {
+	if err = f.c.checkStorage(t.Context()); err != nil {
 		t.Fatal("reusable pages blocked by physical database size:", err)
 	}
-	if _, err = f.c.Store.DB.Exec(`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,2,?,1)`, []byte("reuse"), message); err != nil {
+	if _, err = f.c.Store.DB.Exec(
+		`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,2,?,1)`,
+		[]byte("reuse"),
+		message,
+	); err != nil {
 		t.Fatal("SQLite did not reuse freed pages:", err)
 	}
 }
@@ -383,13 +438,17 @@ func TestDatabaseBudgetAllowsReusingPrunedPages(t *testing.T) {
 func TestNewRejectsLowerDatabaseBudgetBelowPrunedHighWaterMark(t *testing.T) {
 	f := newFixture(t)
 	message := strings.Repeat("x", 2000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		digest := []byte{byte(i >> 8), byte(i)}
-		if _, err := f.c.Store.DB.Exec(`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,0,?,1)`, digest, message); err != nil {
+		if _, err := f.c.Store.DB.Exec(
+			`INSERT INTO events(digest,time_ns,message,occurrences) VALUES(?,0,?,1)`,
+			digest,
+			message,
+		); err != nil {
 			t.Fatal("failed to build high-water database:", err)
 		}
 	}
-	if _, err := f.c.Store.Prune(context.Background(), 1, nil); err != nil {
+	if _, err := f.c.Store.Prune(t.Context(), 1, nil); err != nil {
 		t.Fatal("failed to prune high-water database:", err)
 	}
 	var pageSize, pageCount, freePages int64
@@ -403,7 +462,12 @@ func TestNewRejectsLowerDatabaseBudgetBelowPrunedHighWaterMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	if freePages == 0 || pageCount*pageSize <= 1<<20 {
-		t.Fatalf("fixture did not exceed lowered budget with reusable pages: pages=%d free=%d pageSize=%d", pageCount, freePages, pageSize)
+		t.Fatalf(
+			"fixture did not exceed lowered budget with reusable pages: pages=%d free=%d pageSize=%d",
+			pageCount,
+			freePages,
+			pageSize,
+		)
 	}
 	if err := f.c.Store.Close(); err != nil {
 		t.Fatal(err)
@@ -421,13 +485,17 @@ func TestReclaimsOrphanRuntimeGenerationBeforeLimitCheck(t *testing.T) {
 	f.c.Config.Limits.MaxRuntimeBytes = 1 << 20
 	name := "0123456789abcdef0123456789abcdef"
 	dir := filepath.Join(f.config.RuntimeDir, "generations", name)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "access.log"), make([]byte, 1<<20), 0600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(dir, "access.log"),
+		make([]byte, 1<<20),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.c.checkStorage(); err != nil {
+	if err := f.c.checkStorage(t.Context()); err != nil {
 		t.Fatal("unowned generation caused permanent runtime pressure:", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -439,7 +507,7 @@ func TestTickKeepsCollectingWhenRendererCannotStart(t *testing.T) {
 	f := newFixture(t)
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00Z", "a")}
 	f.r.fail = true
-	if _, err := f.c.Tick(context.Background(), f.now); err != nil {
+	if _, err := f.c.Tick(t.Context(), f.now); err != nil {
 		t.Fatal("render failure interrupted collection:", err)
 	}
 	f.counts(t, 1, 1)
@@ -447,7 +515,7 @@ func TestTickKeepsCollectingWhenRendererCannotStart(t *testing.T) {
 	if err := f.c.Store.Get("cursor", &cursor); err != nil || cursor == 0 {
 		t.Fatal(cursor, err)
 	}
-	if err := f.c.Refresh(f.now); err != nil {
+	if err := f.c.Refresh(t.Context(), f.now); err != nil {
 		t.Fatal(err)
 	}
 	status := f.c.Snapshot()
@@ -458,6 +526,7 @@ func TestTickKeepsCollectingWhenRendererCannotStart(t *testing.T) {
 
 type recordingBackend struct {
 	Backend
+
 	calls [][2]int64
 }
 
@@ -475,9 +544,12 @@ func TestReconciliationGetsTurnsDuringForwardBacklog(t *testing.T) {
 	f.c.Config = f.config
 	backend := &recordingBackend{Backend: f.client}
 	f.c.Backend = backend
-	start := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	start := time.Date(2026, time.October, 2, 12, 0, 0, 0, time.UTC)
 	for i := range 4 {
-		if _, err := f.c.Tick(context.Background(), start.Add(time.Duration(i)*time.Second)); err != nil {
+		if _, err := f.c.Tick(
+			t.Context(),
+			start.Add(time.Duration(i)*time.Second),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -504,9 +576,9 @@ func (s minimumSplitter) Fetch(ctx context.Context, start, end int64) (source.Re
 func TestTimeoutSplitReachesConfiguredMinimumWindow(t *testing.T) {
 	f := newFixture(t)
 	f.c.Backend = minimumSplitter{Backend: f.client}
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 	end := start + int64(300*time.Second)
-	if err := f.c.Window(context.Background(), start, end, true); err != nil {
+	if err := f.c.Window(t.Context(), start, end, true); err != nil {
 		t.Fatal(err)
 	}
 	var cursor int64
@@ -517,6 +589,7 @@ func TestTimeoutSplitReachesConfiguredMinimumWindow(t *testing.T) {
 
 type splitThenFailBackend struct {
 	Backend
+
 	failStart int64
 }
 
@@ -532,22 +605,26 @@ func (b splitThenFailBackend) Fetch(ctx context.Context, start, end int64) (sour
 
 func TestSplitContinuesAfterRenderFailureWithoutMovingFailedReconcilePointer(t *testing.T) {
 	f := newFixture(t)
-	if err := f.c.Export(context.Background()); err != nil {
+	if err := f.c.Export(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(f.config.RuntimeDir, "generations", f.c.Generation, "access.log")
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(path, 0700); err != nil {
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	start := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 	middle, end := start+2*int64(time.Second), start+4*int64(time.Second)
 	f.rows = []map[string]string{f.row("2026-10-01T00:00:01Z", "a")}
 	f.c.Backend = splitThenFailBackend{Backend: f.client, failStart: middle}
 	f.c.reconcileStart, f.c.reconcileEnd, f.c.reconcileTurn = start, end, true
-	if err := f.c.runReconcileWindow(context.Background(), f.now, int64(4*time.Second)); err == nil {
+	if err := f.c.runReconcileWindow(
+		t.Context(),
+		f.now,
+		int64(4*time.Second),
+	); err == nil {
 		t.Fatal("second half backend failure was hidden")
 	}
 	if f.c.reconcileStart != start {
@@ -562,6 +639,7 @@ func TestSplitContinuesAfterRenderFailureWithoutMovingFailedReconcilePointer(t *
 
 type failFirstBackend struct {
 	Backend
+
 	calls [][2]int64
 }
 
@@ -576,7 +654,7 @@ func (b *failFirstBackend) Fetch(ctx context.Context, start, end int64) (source.
 func TestFailedReconciliationYieldsToForwardPolling(t *testing.T) {
 	f := newFixture(t)
 	start := HistoryStart(f.now, 1)
-	if err := f.c.Window(context.Background(), start, start+int64(time.Minute), true); err != nil {
+	if err := f.c.Window(t.Context(), start, start+int64(time.Minute), true); err != nil {
 		t.Fatal(err)
 	}
 	var cursor int64
@@ -586,10 +664,10 @@ func TestFailedReconciliationYieldsToForwardPolling(t *testing.T) {
 	backend := &failFirstBackend{Backend: f.client}
 	f.c.Backend = backend
 	f.c.timeReconcile = f.now
-	if _, err := f.c.Tick(context.Background(), f.now); err == nil {
+	if _, err := f.c.Tick(t.Context(), f.now); err == nil {
 		t.Fatal("reconciliation backend failure was hidden")
 	}
-	if _, err := f.c.Tick(context.Background(), f.now.Add(time.Second)); err != nil {
+	if _, err := f.c.Tick(t.Context(), f.now.Add(time.Second)); err != nil {
 		t.Fatal("forward collection did not resume:", err)
 	}
 	if len(backend.calls) != 2 || backend.calls[1][0] != cursor {
@@ -609,7 +687,7 @@ func (r *failedShutdownConsumer) Stop(context.Context) error {
 func TestShutdownReportsRendererFailureAndReleasesStore(t *testing.T) {
 	f := newFixture(t)
 	f.c.Consumer = &failedShutdownConsumer{}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := f.c.Run(ctx); err == nil || err.Error() != "renderer_shutdown" {
 		t.Fatalf("shutdown error = %v", err)
@@ -631,7 +709,11 @@ func identityConfig(root string) config.Config {
 	c.StateDir = filepath.Join(root, "state")
 	c.RuntimeDir = filepath.Join(root, "runtime")
 	c.ConnectionFile = filepath.Join(root, "connection.json")
-	c.Collection.Source = config.Source{Cluster: "cluster-a", Namespace: "namespace-a", Container: "container-a"}
+	c.Collection.Source = config.Source{
+		Cluster:   "cluster-a",
+		Namespace: "namespace-a",
+		Container: "container-a",
+	}
 	return c
 }
 
@@ -662,7 +744,12 @@ func TestSourceIdentityMismatchPreservesDatabaseAndReleasesLock(t *testing.T) {
 			case "container":
 				changed.Collection.Source.Container = "container-b"
 			}
-			if _, err = New(changed, nil, &consumer{}); err == nil || err.Error() != "source_mismatch" {
+			if _, err = New(
+				changed,
+				nil,
+				&consumer{},
+			); err == nil ||
+				err.Error() != "source_mismatch" {
 				t.Fatalf("New error = %v, want source_mismatch", err)
 			}
 			// Failed startup must release the lock and leave data/cursor untouched.
@@ -709,7 +796,11 @@ func TestLegacyNonemptyDatabaseAdoptsConfiguredSource(t *testing.T) {
 		t.Fatalf("legacy events/copies = %d/%d, err = %v", events, copies, err)
 	}
 	var bound sourceIdentity
-	if err = opened.Store.Get("source_identity", &bound); err != nil || bound != (sourceIdentity{"cluster-a", "namespace-a", "container-a"}) {
+	if err = opened.Store.Get(
+		"source_identity",
+		&bound,
+	); err != nil ||
+		bound != (sourceIdentity{"cluster-a", "namespace-a", "container-a"}) {
 		t.Fatalf("bound identity = %+v, err = %v", bound, err)
 	}
 }
@@ -720,7 +811,9 @@ func TestMalformedSourceIdentityRejectedAndLockReleased(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = opened.Store.DB.Exec(`UPDATE metadata SET value='{"cluster":"cluster-a","namespace":null,"container":"container-a"}' WHERE key='source_identity'`); err != nil {
+	if _, err = opened.Store.DB.Exec(
+		`UPDATE metadata SET value='{"cluster":"cluster-a","namespace":null,"container":"container-a"}' WHERE key='source_identity'`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err = opened.Store.Close(); err != nil {
@@ -747,7 +840,7 @@ func TestReplayProgressKeepsCollectorHealthy(t *testing.T) {
 	if f.c.Healthy(time.Now()) {
 		t.Fatal("fixture must begin past the progress deadline")
 	}
-	if err := f.c.Export(context.Background()); err != nil {
+	if err := f.c.Export(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if !f.c.Healthy(time.Now()) {
@@ -764,7 +857,8 @@ func TestBackgroundIntegrityFailureStopsCollector(t *testing.T) {
 	f.rows = []map[string]string{f.row("2026-10-01T00:01:00.000000001Z", "pod-a")}
 	f.window(t)
 	var root, pageSize int64
-	if err := f.c.Store.DB.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name='events_time'`).Scan(&root); err != nil {
+	if err := f.c.Store.DB.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name='events_time'`).
+		Scan(&root); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.c.Store.DB.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
@@ -781,7 +875,12 @@ func TestBackgroundIntegrityFailureStopsCollector(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	if _, err := New(f.config, f.client, &consumer{}); err == nil || err.Error() != "database_integrity" {
+	if _, err := New(
+		f.config,
+		f.client,
+		&consumer{},
+	); err == nil ||
+		err.Error() != "database_integrity" {
 		t.Fatalf("startup check: got %v, want database_integrity", err)
 	}
 	c := f.config
@@ -790,7 +889,7 @@ func TestBackgroundIntegrityFailureStopsCollector(t *testing.T) {
 	if err != nil {
 		t.Fatal("deferred open:", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	if err := collector.Run(ctx); err == nil || err.Error() != "database_integrity" {
 		t.Fatalf("run: got %v, want database_integrity", err)
@@ -812,7 +911,7 @@ func TestBackgroundIntegritySuccessKeepsCollecting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	if err := collector.Run(ctx); err != nil {
 		t.Fatal(err)

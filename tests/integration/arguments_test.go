@@ -25,8 +25,13 @@ func TestRejectUnexpectedArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			output, err := exec.CommandContext(t.Context(), binary, tc.args...).CombinedOutput()
 			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || string(output) != "configuration_arguments\n" {
-				t.Fatalf("got output %q and error %v, want configuration_arguments and exit 1", output, err)
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 ||
+				string(output) != "configuration_arguments\n" {
+				t.Fatalf(
+					"got output %q and error %v, want configuration_arguments and exit 1",
+					output,
+					err,
+				)
 			}
 		})
 	}
