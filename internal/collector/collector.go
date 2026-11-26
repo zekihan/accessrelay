@@ -276,11 +276,12 @@ func (c *Collector) Refresh(ctx context.Context, now time.Time) error {
 	if unix.Statfs(c.Config.StateDir, &disk) != nil {
 		return errors.New("storage_read")
 	}
-	if disk.Bsize < 0 {
+	blockSize, ok := statfsBlockSize(&disk)
+	if !ok {
 		return errors.New("storage_read")
 	}
-	free := disk.Bavail * uint64(disk.Bsize)
-	total := disk.Blocks * uint64(disk.Bsize)
+	free := disk.Bavail * blockSize
+	total := disk.Blocks * blockSize
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := &c.status
@@ -350,14 +351,22 @@ func (c *Collector) checkStorage(ctx context.Context) error {
 		if unix.Statfs(dir, &st) != nil {
 			return errors.New("storage_read")
 		}
-		if st.Bsize < 0 {
+		blockSize, ok := statfsBlockSize(&st)
+		if !ok {
 			return errors.New("storage_read")
 		}
-		if st.Bavail*uint64(st.Bsize) < c.Config.Limits.ReserveBytes {
+		if st.Bavail*blockSize < c.Config.Limits.ReserveBytes {
 			return errors.New("storage_reserve")
 		}
 	}
 	return nil
+}
+
+func statfsBlockSize(st *unix.Statfs_t) (uint64, bool) {
+	if st.Bsize <= 0 {
+		return 0, false
+	}
+	return uint64(st.Bsize), true
 }
 
 // reclaimUnownedGenerations removes directories only after the consumer has
