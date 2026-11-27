@@ -89,8 +89,19 @@ spec:
           persistentVolumeClaim:
             claimName: {{ default (printf "%s-state" (include "accessrelay.fullname" .)) .Values.storage.existingClaim | quote }}
         - name: runtime
+          {{- if .Values.runtimeStorageClass }}
+          ephemeral:
+            volumeClaimTemplate:
+              spec:
+                accessModes: [ReadWriteOnce]
+                storageClassName: {{ .Values.runtimeStorageClass | quote }}
+                resources:
+                  requests:
+                    storage: {{ .Values.runtimeSizeLimit | quote }}
+          {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.runtimeSizeLimit }}
+          {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.tmpSizeLimit }}

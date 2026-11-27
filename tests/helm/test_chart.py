@@ -63,6 +63,31 @@ class ChartTests(unittest.TestCase):
         self.assertFalse(json.loads(config)["report"]["streamReplay"])
         self.assertEqual(json.loads(config)["database"]["synchronous"], "full")
 
+    def test_runtime_storage_is_disposable_and_independent_of_state(self):
+        default, scratch = [
+            next(obj for obj in objects if obj["kind"] == "Deployment")["spec"][
+                "template"
+            ]["spec"]
+            for objects in (
+                render(),
+                render("--set", "runtimeStorageClass=scratch,runtimeSizeLimit=5Gi"),
+            )
+        ]
+        default_vols = {vol["name"]: vol for vol in default["volumes"]}
+        scratch_vols = {vol["name"]: vol for vol in scratch["volumes"]}
+        self.assertEqual(default_vols["runtime"]["emptyDir"], {"sizeLimit": "3Gi"})
+        self.assertEqual(scratch_vols["state"], default_vols["state"])
+        self.assertEqual(scratch_vols["tmp"], default_vols["tmp"])
+        self.assertNotIn("emptyDir", scratch_vols["runtime"])
+        self.assertEqual(
+            scratch_vols["runtime"]["ephemeral"]["volumeClaimTemplate"]["spec"],
+            {
+                "accessModes": ["ReadWriteOnce"],
+                "storageClassName": "scratch",
+                "resources": {"requests": {"storage": "5Gi"}},
+            },
+        )
+
     def test_probe_timing_overrides_keep_default_endpoints(self):
         objects = render(
             "--set",

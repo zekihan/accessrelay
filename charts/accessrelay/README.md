@@ -12,7 +12,8 @@ NetworkPolicy. No RBAC resources or service-account tokens are needed.
 | `connectionSecret` | existing Secret with `connection.json`; mounted as a directory to allow rotation |
 | `storage.existingClaim` | reuse an existing retained claim; suppresses PVC creation |
 | `storage.size`, `storageClass`, `labels`, `annotations` | 2Gi; default class; deployment-specific policy |
-| `runtimeSizeLimit`, `tmpSizeLimit` | 3Gi and 64Mi emptyDirs |
+| `runtimeSizeLimit`, `tmpSizeLimit` | 3Gi for /runtime and 64Mi for /tmp |
+| `runtimeStorageClass` | empty for an emptyDir at /runtime. Set a class to provision a disposable claim sized by `runtimeSizeLimit` for each pod |
 | `config.collection` | source, delay, polling overlap, reconciliation, backfill and query/line/window bounds |
 | `config.metricsAddr` | internal metrics listener address, default `:9090`; empty disables it |
 | `config.database` | SQLite mapping, integrity-check timing, replay prefetch and synchronous mode |

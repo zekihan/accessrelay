@@ -27,6 +27,7 @@ storage:
   annotations: {}
   labels: {}
 runtimeSizeLimit: 3Gi
+runtimeStorageClass: ""
 tmpSizeLimit: 64Mi
 service:
   port: 8080
