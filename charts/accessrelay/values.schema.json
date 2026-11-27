@@ -16,6 +16,7 @@
     }
   },
   "properties": {
+    "runtimeStorageClass": { "type": "string" },
     "replicaCount": {
       "type": "integer",
       "minimum": 0,
