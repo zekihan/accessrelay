@@ -52,6 +52,20 @@ func fakeGoAccess(args []string) {
 		if err != nil {
 			os.Exit(4)
 		}
+		if lines == len(buffer)/len(feedLine) && os.Getenv("ACCESSRELAY_TEST_FEED_GATE") == "1" {
+			// Let the test observe the throttle after the first read, even
+			// when the child and throttle run at very different rates.
+			for {
+				if _, err := os.Stat(f.Name() + ".resume"); err == nil {
+					break
+				}
+				select {
+				case <-interrupted:
+					return
+				case <-time.After(time.Millisecond):
+				}
+			}
+		}
 		time.Sleep(time.Millisecond)
 	}
 	if os.WriteFile(output, []byte("<html>"+strconv.Itoa(lines)+"</html>"), 0o600) != nil {
@@ -137,41 +151,60 @@ func appendLines(t *testing.T, f *os.File, feed *Feed, lines int) {
 }
 
 func TestFeedKeepsSlowWriterAheadOfRenderer(t *testing.T) {
+	t.Setenv("ACCESSRELAY_TEST_FEED_GATE", "1")
 	r, path := newFeedRenderer(t)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	feed := NewFeed(64 << 10)
-	appendLines(t, f, feed, 2048)
+	const margin = 64 << 10
+	feed := NewFeed(margin)
+	// Once the fake child reads 4 KiB, only 62 KiB remain. Its first
+	// read must put it inside the margin and suspend it.
+	initial := (margin + (2 << 10)) / len(feedLine)
+	appendLines(t, f, feed, initial)
 	if err := r.StartFeed(t.Context(), "feed", feed); err != nil {
 		t.Fatal(err)
 	}
-	// Write far slower than the reader consumes; unthrottled, it would reach
-	// end of file and snapshot a partial replay.
-	total := 2048
-	for range 20 {
-		time.Sleep(25 * time.Millisecond)
-		appendLines(t, f, feed, 256)
-		total += 256
+	statusPath := filepath.Join("/proc", strconv.Itoa(r.cmd.Process.Pid), "status")
+	stopped := func() bool {
+		data, err := os.ReadFile(statusPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes.Contains(data, []byte("\nState:\tT "))
 	}
+	waitForFeed(t, stopped, "renderer did not suspend inside the margin")
 	r.tick(t.Context())
 	if r.Snapshot().Ready {
 		t.Fatal("renderer became ready before the replay was complete")
 	}
+	extra := margin / len(feedLine)
+	appendLines(t, f, feed, extra)
+	waitForFeed(t, func() bool { return !stopped() }, "renderer did not resume after the write")
 	feed.Close()
-	want := "<html>" + strconv.Itoa(total) + "</html>"
+	if err := os.WriteFile(path+".resume", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := "<html>" + strconv.Itoa(initial+extra) + "</html>"
+	waitForFeed(t, func() bool {
+		data, _ := os.ReadFile(r.output)
+		return string(data) == want
+	}, "renderer did not snapshot the complete replay")
+}
+
+func waitForFeed(t *testing.T, condition func() bool, message string) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		data, _ := os.ReadFile(r.output)
-		if string(data) == want {
+		if condition() {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("snapshot=%q, want %q", data, want)
+			t.Fatal(message)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
