@@ -26,7 +26,7 @@ func TestPurgeEventsRemovesMatchesWithChangesAndRecordsMarker(t *testing.T) {
 	progress := 0
 	removed, err := s.PurgeEvents(
 		t.Context(),
-		func(m string) bool { return strings.HasPrefix(m, "drop") },
+		func(_, m string) bool { return strings.HasPrefix(m, "drop") },
 		"excluded_routers",
 		[]string{"r"},
 		func() { progress++ },
@@ -70,7 +70,7 @@ func TestPurgeEventsCancellationLeavesMarkerUnset(t *testing.T) {
 	cancel()
 	if _, err = s.PurgeEvents(
 		ctx,
-		func(string) bool { return true },
+		func(string, string) bool { return true },
 		"excluded_routers",
 		[]string{"r"},
 		nil,

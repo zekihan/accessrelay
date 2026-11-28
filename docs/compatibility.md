@@ -20,13 +20,16 @@ The database retains these tables and their original column order:
 - `events(id,digest,time_ns,source_id,message,occurrences)` with SHA-256 digests;
 - `changes(seq,event_id,copies)` with an autoincremented append sequence.
 
-Digests use the original JSON serialization of `[identity,time_ns,message]`,
+Traefik digests use the original JSON serialization of `[identity,time_ns,message]`,
 including Unicode escaping, control-character escaping and surrogate pairs.
 Compatibility tests generate legacy databases on isolated copies, replay the
 same windows using Go, and assert no extra events or occurrences. Tests also
 reopen the result with Python for rollback. Unknown SQLite schema versions,
 missing/changed columns, extra application tables and failed integrity checks
-are rejected. This release does not rewrite the schema or require a migration.
+are rejected. The multi-source migration adds a metadata key and leaves existing
+events and the schema intact. For Gatehouse, the digest includes the original JSON
+message and a format-specific source identity. SQLite stores the converted CLF
+line for replay.
 
 New stores also create `events_source` on `events(source_id)`, matching the index
 previously added to the live store by a one-off maintenance script. Creation uses

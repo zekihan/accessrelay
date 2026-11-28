@@ -20,22 +20,53 @@ type Source struct {
 	Namespace string `json:"namespace"`
 	Container string `json:"container"`
 }
+
+const (
+	TraefikCLF    = "traefik-clf"
+	GatehouseJSON = "gatehouse-json"
+)
+
+type Input struct {
+	Source
+	Format string `json:"format"`
+}
+
 type Collection struct {
-	Source                 Source `json:"source"`
-	PollInterval           string `json:"pollInterval"`
-	IngestionDelay         string `json:"ingestionDelay"`
-	Overlap                string `json:"overlap"`
-	ReconciliationInterval string `json:"reconciliationInterval"`
-	BackfillWindow         string `json:"backfillWindow"`
-	MinimumWindow          string `json:"minimumWindow"`
-	QueryTimeout           string `json:"queryTimeout"`
-	StaleAfter             string `json:"staleAfter"`
-	MaxLineBytes           int    `json:"maxLineBytes"`
-	MaxWindowBytes         int64  `json:"maxWindowBytes"`
+	Source Source `json:"source"`
+	// Sources replaces Source when configured.
+	Sources                []Input `json:"sources"`
+	PollInterval           string  `json:"pollInterval"`
+	IngestionDelay         string  `json:"ingestionDelay"`
+	Overlap                string  `json:"overlap"`
+	ReconciliationInterval string  `json:"reconciliationInterval"`
+	BackfillWindow         string  `json:"backfillWindow"`
+	MinimumWindow          string  `json:"minimumWindow"`
+	QueryTimeout           string  `json:"queryTimeout"`
+	StaleAfter             string  `json:"staleAfter"`
+	MaxLineBytes           int     `json:"maxLineBytes"`
+	MaxWindowBytes         int64   `json:"maxWindowBytes"`
 	// ExcludeRouters lists Traefik router names whose requests are neither
 	// stored nor reported. Already stored events are purged once.
 	ExcludeRouters []string `json:"excludeRouters"`
+	ExcludeRoutes  []string `json:"excludeRoutes"`
 }
+
+func (c Collection) Inputs() []Input {
+	if c.Sources != nil {
+		return c.Sources
+	}
+	return []Input{{Source: c.Source, Format: TraefikCLF}}
+}
+
+func (s Source) Valid() bool {
+	for _, part := range []string{s.Cluster, s.Namespace, s.Container} {
+		if part == "" || strings.ContainsAny(part, "\r\n\x00") {
+			return false
+		}
+	}
+	return true
+}
+
 type Report struct {
 	HistoryDays     int               `json:"historyDays"`
 	Jobs            int               `json:"jobs"`
@@ -200,20 +231,8 @@ func (c Config) Validate() error {
 		c.Report.ChunkSize > 1048576 {
 		return errors.New("configuration_report")
 	}
-	for _, s := range []string{c.Collection.Source.Cluster, c.Collection.Source.Namespace, c.Collection.Source.Container} {
-		if s == "" || strings.ContainsAny(s, "\r\n\x00") {
-			return errors.New("configuration_source")
-		}
-	}
-	if len(c.Collection.ExcludeRouters) > 64 {
-		return errors.New("configuration_exclusion")
-	}
-	excluded := map[string]bool{}
-	for _, r := range c.Collection.ExcludeRouters {
-		if r == "" || len(r) > 256 || excluded[r] || strings.ContainsAny(r, "\" \t\r\n\x00\\") {
-			return errors.New("configuration_exclusion")
-		}
-		excluded[r] = true
+	if err := c.Collection.validateSources(); err != nil {
+		return err
 	}
 	for _, s := range []string{c.StateDir, c.RuntimeDir, c.ConnectionFile} {
 		if !filepath.IsAbs(s) || strings.ContainsAny(s, "\r\n\x00") {
@@ -289,6 +308,35 @@ func (c Config) Validate() error {
 		c.Limits.DiagnosticBytes > 67108864 ||
 		c.Limits.ReserveBytes < 1048576 {
 		return errors.New("configuration_limits")
+	}
+	return nil
+}
+
+func (c Collection) validateSources() error {
+	inputs := c.Inputs()
+	if len(inputs) == 0 || len(inputs) > 16 {
+		return errors.New("configuration_source")
+	}
+	seen := map[Source]bool{}
+	for _, input := range inputs {
+		if !input.Valid() || seen[input.Source] ||
+			(input.Format != TraefikCLF && input.Format != GatehouseJSON) {
+			return errors.New("configuration_source")
+		}
+		seen[input.Source] = true
+	}
+	for _, exclusions := range [][]string{c.ExcludeRouters, c.ExcludeRoutes} {
+		if len(exclusions) > 64 {
+			return errors.New("configuration_exclusion")
+		}
+		excluded := map[string]bool{}
+		for _, name := range exclusions {
+			if name == "" || len(name) > 256 || excluded[name] ||
+				strings.ContainsAny(name, "\" \t\r\n\x00\\") {
+				return errors.New("configuration_exclusion")
+			}
+			excluded[name] = true
+		}
 	}
 	return nil
 }
