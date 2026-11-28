@@ -42,6 +42,7 @@ func fakeGoAccess(args []string) {
 		os.Exit(3)
 	}
 	buffer := make([]byte, 4096)
+	pause := f.Name() + ".pause"
 	lines := 0
 	for {
 		n, err := f.Read(buffer)
@@ -52,11 +53,11 @@ func fakeGoAccess(args []string) {
 		if err != nil {
 			os.Exit(4)
 		}
-		if lines == len(buffer)/len(feedLine) && os.Getenv("ACCESSRELAY_TEST_FEED_GATE") == "1" {
+		if lines == len(buffer)/len(feedLine) {
 			// Let the test observe the throttle after the first read, even
 			// when the child and throttle run at very different rates.
 			for {
-				if _, err := os.Stat(f.Name() + ".resume"); err == nil {
+				if _, err := os.Stat(pause); os.IsNotExist(err) {
 					break
 				}
 				select {
@@ -151,8 +152,11 @@ func appendLines(t *testing.T, f *os.File, feed *Feed, lines int) {
 }
 
 func TestFeedKeepsSlowWriterAheadOfRenderer(t *testing.T) {
-	t.Setenv("ACCESSRELAY_TEST_FEED_GATE", "1")
 	r, path := newFeedRenderer(t)
+	pause := path + ".pause"
+	if err := os.WriteFile(pause, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +188,7 @@ func TestFeedKeepsSlowWriterAheadOfRenderer(t *testing.T) {
 	appendLines(t, f, feed, extra)
 	waitForFeed(t, func() bool { return !stopped() }, "renderer did not resume after the write")
 	feed.Close()
-	if err := os.WriteFile(path+".resume", nil, 0o600); err != nil {
+	if err := os.Remove(pause); err != nil {
 		t.Fatal(err)
 	}
 	want := "<html>" + strconv.Itoa(initial+extra) + "</html>"
