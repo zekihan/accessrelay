@@ -24,16 +24,6 @@ type diagnosticCapture struct {
 	writeError atomic.Bool
 }
 
-// waitDiagnostic sleeps for d or reports that stop was requested.
-func waitDiagnostic(c *diagnosticCapture, d time.Duration) bool {
-	select {
-	case <-c.stop:
-		return true
-	case <-time.After(d):
-		return false
-	}
-}
-
 func readDiagnosticTail(f *os.File, limit int64) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
@@ -144,57 +134,38 @@ func (c *diagnosticCapture) drain() {
 	dirty := false
 	lastFlush := time.Now()
 	for {
+		// An empty read made before shutdown can race with the child's last
+		// write. Read again after observing stop, when no writer remains.
+		stopping := false
+		select {
+		case <-c.stop:
+			stopping = true
+		default:
+		}
 		n, err := readDiagnosticFIFO(c.pipe, buf)
 		if n > 0 {
 			c.append(buf[:n])
 			dirty = true
-			if time.Since(lastFlush) >= 250*time.Millisecond {
-				c.flush()
-				dirty = false
-				lastFlush = time.Now()
-			}
 		}
-		if err != nil {
-			if isWouldBlock(err) {
-				if dirty && time.Since(lastFlush) >= 250*time.Millisecond {
-					c.flush()
-					dirty = false
-					lastFlush = time.Now()
-				}
-				select {
-				case <-c.stop:
-					goto done
-				default:
-				}
-				if waitDiagnostic(c, 20*time.Millisecond) {
-					goto done
-				}
-				continue
-			}
-			c.writeError.Store(true)
-			// A persistent read error must not outlive a close request.
-			select {
-			case <-c.stop:
-				goto done
-			default:
-			}
-			if waitDiagnostic(c, 20*time.Millisecond) {
-				goto done
-			}
+		if dirty && time.Since(lastFlush) >= 250*time.Millisecond {
+			c.flush()
+			dirty = false
+			lastFlush = time.Now()
+		}
+		if n > 0 {
 			continue
 		}
-		if n == 0 {
-			select {
-			case <-c.stop:
-				goto done
-			default:
-				if waitDiagnostic(c, 20*time.Millisecond) {
-					goto done
-				}
-			}
+		if err != nil && !isWouldBlock(err) {
+			c.writeError.Store(true)
+		}
+		if stopping {
+			break
+		}
+		select {
+		case <-c.stop:
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-done:
 	if dirty {
 		c.flush()
 	}

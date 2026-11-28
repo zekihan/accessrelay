@@ -251,6 +251,56 @@ class RuntimeTests(unittest.TestCase):
                     self.assertTrue(path.is_file(), "clean stop must restore a regular diagnostic file")
                     self.assertEqual(path.read_bytes(), path.with_name(diagnostic + ".snapshot").read_bytes())
                     self.assertLessEqual(path.stat().st_size, 128)
+
+                config_path = root / "app/config/accessrelay.json"
+                traefik = config["collection"]["source"]
+                gatehouse = dict(traefik, namespace="gatehouse", container="gatehouse")
+                config["collection"]["sources"] = [
+                    dict(traefik, format="traefik-clf"),
+                    dict(gatehouse, format="gatehouse-json"),
+                ]
+
+                def select(log, selector):
+                    return dict(log, **{"cluster": selector["cluster"],
+                                        "kubernetes.namespace_name": selector["namespace"],
+                                        "kubernetes.container_name": selector["container"]})
+
+                def access(request_id, **fields):
+                    entry = dict(time=now.isoformat(), request_id=request_id, listener=8443,
+                                 client_ip="2001:db8::2", method="GET", path="/via-gatehouse",
+                                 proto="HTTP/2.0", status=200, bytes_out=13, duration_ms=3.25,
+                                 route="app/web", backend="app/web:80")
+                    entry.update(fields)
+                    return select(dict(row(), _msg=json.dumps(entry)), gatehouse)
+
+                with backend.mutex:
+                    backend.pause_app_response = False
+                    backend.rows = [select(log, traefik) for log in backend.rows] + [
+                        access("gatehouse-1", query="Signature=[redacted]"),
+                        access("gatehouse-2", path="/excluded-gatehouse", route="logs/journald"),
+                        access("gatehouse-3", client_ip="", method="", path="", proto="",
+                               status=400, bytes_out=0, route="", backend="", deny_reason="http_parse_error"),
+                    ]
+
+                def start_mixed(expected):
+                    config_path.write_text(json.dumps(config))
+                    docker("start", names["app"])
+                    ports["app"] = int(docker("port", names["app"], "8080/tcp").stdout.strip().rsplit(":", 1)[1])
+                    wait(lambda: report(request("app"))["general"]["valid_requests"] == expected)
+                    self.assertIsNone(json.loads(request("app", "/status.json"))["error"])
+
+                start_mixed(7)
+                mixed = request("app")
+                requests = {entry["data"] for entry in report(mixed)["requests"]["data"]}
+                self.assertTrue(any(path.startswith("/via-gatehouse") for path in requests))
+                self.assertIn("/excluded-gatehouse", requests)
+                replay = next((root / "app/runtime/generations").glob("*/access.log"))
+                self.assertTrue(any(' "app/web" ' in line for line in replay.read_text().splitlines()))
+                docker("stop", "-t", "30", names["app"])
+                config["collection"]["excludeRoutes"] = ["logs/journald"]
+                start_mixed(6)
+                requests = {entry["data"] for entry in report(request("app"))["requests"]["data"]}
+                self.assertNotIn("/excluded-gatehouse", requests)
             except BaseException:
                 for name in started:
                     logs = docker("logs", "--tail", "10", name, check=False)

@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/zekihan/accessrelay/internal/config"
 )
 
 // Traefik's common log format ends with the request count, the quoted router
@@ -86,9 +88,15 @@ type Record struct {
 	Digest          [32]byte
 	TimeNS          int64
 	Source, Message string
+	route           string
+	gatehouse       bool
 }
 
 func Decode(raw []byte, start, end int64) (Record, bool, error) {
+	return decode(raw, start, end, nil)
+}
+
+func decode(raw []byte, start, end int64, formats map[config.Source]string) (Record, bool, error) {
 	var r Record
 	if !utf8.Valid(raw) || !validUnicodeEscapes(raw) {
 		return r, false, errors.New("invalid_record")
@@ -127,22 +135,49 @@ func Decode(raw []byte, start, end int64) (Record, bool, error) {
 	if strings.ContainsAny(r.Message, "\r\n\x00") {
 		return r, false, errors.New("invalid_record")
 	}
-	identity := []string{}
+	stream := []string{}
 	for _, key := range []string{"_stream_id", "kubernetes.pod_id", "kubernetes.docker_id"} {
 		s, e := read(key, key == "_stream_id")
 		if e != nil {
 			return r, false, e
 		}
-		identity = append(identity, s)
+		stream = append(stream, s)
 	}
-	if !clf.MatchString(r.Message) {
+	var identity any = stream
+	rawMessage := r.Message
+	if formats != nil {
+		var values [len(selectorFields)]string
+		for i, field := range selectorFields {
+			value, e := read(field, true)
+			if e != nil {
+				return r, false, e
+			}
+			values[i] = value
+		}
+		selection := config.Source{Cluster: values[0], Namespace: values[1], Container: values[2]}
+		switch formats[selection] {
+		case config.GatehouseJSON:
+			message, route, operational, e := gatehouseCLF(rawMessage)
+			if e != nil || operational {
+				return r, operational, e
+			}
+			r.Message, r.route, r.gatehouse = message, route, true
+			identity = gatehouseIdentity{
+				Format: config.GatehouseJSON, Selector: selection, Stream: stream, Route: route,
+			}
+		case config.TraefikCLF:
+		default:
+			return r, false, errors.New("invalid_record")
+		}
+	}
+	if !r.gatehouse && !clf.MatchString(r.Message) {
 		return r, true, nil
 	}
 	r.Source, err = CanonicalJSON(identity)
 	if err != nil {
 		return r, false, err
 	}
-	encoded, err := CanonicalJSON([]any{identity, r.TimeNS, r.Message})
+	encoded, err := CanonicalJSON([]any{identity, r.TimeNS, rawMessage})
 	if err != nil {
 		return r, false, err
 	}

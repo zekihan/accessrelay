@@ -14,7 +14,7 @@ NetworkPolicy. No RBAC resources or service-account tokens are needed.
 | `storage.size`, `storageClass`, `labels`, `annotations` | 2Gi; default class; deployment-specific policy |
 | `runtimeSizeLimit`, `tmpSizeLimit` | 3Gi for /runtime and 64Mi for /tmp |
 | `runtimeStorageClass` | empty for an emptyDir at /runtime. Set a class to provision a disposable claim sized by `runtimeSizeLimit` for each pod |
-| `config.collection` | source, delay, polling overlap, reconciliation, backfill and query/line/window bounds |
+| `config.collection` | single `source` or a list of `sources`, router/route exclusions, polling delay and overlap, reconciliation, backfill and query/line/window bounds |
 | `config.metricsAddr` | internal metrics listener address, default `:9090`; empty disables it |
 | `config.database` | SQLite mapping, integrity-check timing, replay prefetch and synchronous mode |
 | `config.report` | UTC history, workers, chunk size, replay streaming, public WebSocket URL, safe report overrides and extra browser mappings |
@@ -36,6 +36,8 @@ report overrides use string booleans (`"true"`, `"false"`, `"yes"`, `"no"`) or
 supported date/hour values. Unknown or multiline overrides are rejected.
 Database and replay tuning defaults, bounds and tradeoffs are described in
 [operations](../../docs/operations.md#retention-and-sizing).
+See [Add a Gatehouse input](../../docs/operations.md#add-a-gatehouse-input) for
+an example of collecting both formats.
 
 The chart retains created claims using `helm.sh/resource-policy: keep` and
 `Prune=false,Delete=false`. An existing claim remains managed by its owner.

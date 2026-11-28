@@ -88,10 +88,10 @@
             "minimumWindow",
             "queryTimeout",
             "staleAfter",
-            "source",
             "maxLineBytes",
             "maxWindowBytes"
           ],
+          "anyOf": [{"required": ["source"]}, {"required": ["sources"]}],
           "properties": {
             "pollInterval": {
               "type": "string",
@@ -168,6 +168,53 @@
               "type": "integer",
               "minimum": 1024,
               "maximum": 1073741824
+            },
+            "sources": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "required": [
+                  "cluster",
+                  "namespace",
+                  "container",
+                  "format"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "cluster": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "namespace": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "container": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "traefik-clf",
+                      "gatehouse-json"
+                    ]
+                  }
+                }
+              }
+            },
+            "excludeRoutes": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\"\\s\\\\]+$"
+              }
             }
           }
         },

@@ -4,9 +4,7 @@ package collector
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,7 +146,7 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 		_ = s.Close()
 		return nil, errors.New("database_limit")
 	}
-	if err := bindSourceIdentity(s.DB, c.Collection.Source); err != nil {
+	if err := bindSources(s.DB, c.Collection); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
@@ -174,58 +172,6 @@ func New(c config.Config, backend Backend, consumer Consumer) (*Collector, error
 		}
 	}
 	return collector, nil
-}
-
-type sourceIdentity struct {
-	Cluster   string `json:"cluster"`
-	Namespace string `json:"namespace"`
-	Container string `json:"container"`
-}
-
-// bindSourceIdentity pins an existing database to its configured log source.
-// An unbound inherited database is adopted on first startup; its original
-// source cannot be recovered from the inherited schema.
-func bindSourceIdentity(db *sql.DB, configured config.Source) error {
-	want := sourceIdentity{
-		Cluster:   configured.Cluster,
-		Namespace: configured.Namespace,
-		Container: configured.Container,
-	}
-	tx, err := db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return errors.New("database_metadata")
-	}
-	defer func() { _ = tx.Rollback() }()
-	var raw string
-	err = tx.QueryRowContext(context.Background(), `SELECT value FROM metadata WHERE key='source_identity'`).
-		Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		encoded, marshalErr := json.Marshal(want)
-		if marshalErr != nil {
-			return errors.New("database_metadata")
-		}
-		if _, err = tx.ExecContext(context.Background(),
-			`INSERT INTO metadata(key,value) VALUES('source_identity',?)`,
-			string(encoded),
-		); err != nil {
-			return errors.New("database_metadata")
-		}
-	} else if err != nil {
-		return errors.New("database_metadata")
-	} else {
-		var got sourceIdentity
-		if json.Unmarshal([]byte(raw), &got) != nil || got.Cluster == "" || got.Namespace == "" ||
-			got.Container == "" {
-			return errors.New("database_metadata")
-		}
-		if got != want {
-			return errors.New("source_mismatch")
-		}
-	}
-	if tx.Commit() != nil {
-		return errors.New("database_metadata")
-	}
-	return nil
 }
 
 func HistoryStart(now time.Time, days int) int64 {
@@ -653,31 +599,42 @@ func (c *Collector) Window(ctx context.Context, start, end int64, advance bool) 
 	return c.Cleanup()
 }
 
-// applyExclusion removes stored events of newly excluded routers. The applied
-// list is recorded so later starts skip the full scan until it changes.
-func (c *Collector) applyExclusion(ctx context.Context) error {
-	routers := slices.Sorted(slices.Values(c.Config.Collection.ExcludeRouters))
+// applyExclusion removes stored requests for newly excluded routers or routes.
+// The applied list is recorded so restarts can skip the scan until it changes.
+func (c *Collector) applyExclusion(
+	ctx context.Context,
+	key string,
+	names []string,
+	gatehouse bool,
+) error {
+	exclusions := slices.Sorted(slices.Values(names))
 	var applied []string
-	if err := c.Store.GetContext(ctx, "excluded_routers", &applied); err != nil {
+	if err := c.Store.GetContext(ctx, key, &applied); err != nil {
 		return err
 	}
-	if slices.Equal(applied, routers) {
+	if slices.Equal(applied, exclusions) {
 		return nil
 	}
 	added := map[string]bool{}
-	for _, r := range routers {
+	for _, r := range exclusions {
 		if !slices.Contains(applied, r) {
 			added[r] = true
 		}
 	}
 	if len(added) == 0 {
-		return c.Store.PutContext(ctx, "excluded_routers", routers)
+		return c.Store.PutContext(ctx, key, exclusions)
+	}
+	var routers, routes map[string]bool
+	if gatehouse {
+		routes = added
+	} else {
+		routers = added
 	}
 	removed, err := c.Store.PurgeEvents(
 		ctx,
-		func(message string) bool { return source.Excluded(message, added) },
-		"excluded_routers",
-		routers,
+		func(identity, message string) bool { return source.ReplayExcluded(identity, message, routers, routes) },
+		key,
+		exclusions,
 		c.progress,
 	)
 	if removed > 0 {
@@ -690,7 +647,20 @@ func (c *Collector) Tick(ctx context.Context, now time.Time) (bool, error) {
 	cutoff := HistoryStart(now, c.Config.Report.HistoryDays)
 	target := now.Add(-config.Duration(c.Config.Collection.IngestionDelay)).UnixNano()
 	if !c.exclusionApplied {
-		if err := c.applyExclusion(ctx); err != nil {
+		if err := c.applyExclusion(
+			ctx,
+			"excluded_routers",
+			c.Config.Collection.ExcludeRouters,
+			false,
+		); err != nil {
+			return false, err
+		}
+		if err := c.applyExclusion(
+			ctx,
+			"excluded_routes",
+			c.Config.Collection.ExcludeRoutes,
+			true,
+		); err != nil {
 			return false, err
 		}
 		c.exclusionApplied = true

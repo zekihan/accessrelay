@@ -56,6 +56,52 @@ func New(c config.Config) *Client {
 	}
 }
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
+
+var selectorFields = [...]string{
+	"cluster",
+	"kubernetes.namespace_name",
+	"kubernetes.container_name",
+}
+
+func windowQuery(collection config.Collection) (string, map[config.Source]string) {
+	const fields = " | fields _time, _stream_id, kubernetes.pod_id, kubernetes.docker_id, _msg"
+	var query strings.Builder
+	query.WriteString("options(allow_partial_response=false) ")
+	inputs := collection.Inputs()
+	var formats map[config.Source]string
+	if collection.Sources != nil {
+		formats = make(map[config.Source]string, len(inputs))
+		query.WriteByte('(')
+	}
+	for i, input := range inputs {
+		if formats != nil {
+			if i > 0 {
+				query.WriteString(" OR ")
+			}
+			formats[input.Source] = input.Format
+			query.WriteByte('(')
+		}
+		for j, value := range [...]string{input.Cluster, input.Namespace, input.Container} {
+			if j > 0 {
+				query.WriteByte(' ')
+			}
+			// LogsQL uses Go string literals for quoted values.
+			query.WriteString(selectorFields[j] + ":=" + strconv.Quote(value))
+		}
+		if formats != nil {
+			query.WriteByte(')')
+		}
+	}
+	if formats != nil {
+		query.WriteByte(')')
+	}
+	query.WriteString(fields)
+	if formats != nil {
+		query.WriteString(", " + strings.Join(selectorFields[:], ", "))
+	}
+	return query.String(), formats
+}
+
 func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, err error) {
 	if start >= end {
 		return result, queryError("invalid_window", false)
@@ -77,14 +123,7 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		u.Fragment != "" {
 		return result, queryError("connection_configuration", false)
 	}
-	query := "options(allow_partial_response=false)"
-	var querySb80 strings.Builder
-	for _, field := range [][2]string{{"cluster", c.Config.Collection.Source.Cluster}, {"kubernetes.namespace_name", c.Config.Collection.Source.Namespace}, {"kubernetes.container_name", c.Config.Collection.Source.Container}} {
-		// LogsQL expects Go string literals, including for supplementary Unicode.
-		querySb80.WriteString(" " + field[0] + ":=" + strconv.Quote(field[1]))
-	}
-	query += querySb80.String()
-	query += " | fields _time, _stream_id, kubernetes.pod_id, kubernetes.docker_id, _msg"
+	query, formats := windowQuery(c.Config.Collection)
 	params := url.Values{
 		"query":                  {query},
 		"start":                  {Timestamp(start)},
@@ -180,9 +219,13 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 		return result, errors.New("stage_storage")
 	}
 	defer func() { _ = statement.Close() }()
-	excluded := map[string]bool{}
+	routers := map[string]bool{}
 	for _, r := range c.Config.Collection.ExcludeRouters {
-		excluded[r] = true
+		routers[r] = true
+	}
+	routes := map[string]bool{}
+	for _, r := range c.Config.Collection.ExcludeRoutes {
+		routes[r] = true
 	}
 	reader := bufio.NewReaderSize(response.Body, c.Config.Collection.MaxLineBytes+1)
 	for {
@@ -201,7 +244,7 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 				!errors.Is(readErr, bufio.ErrBufferFull),
 			)
 		}
-		record, operational, e := Decode(line, start, end)
+		record, operational, e := decode(line, start, end, formats)
 		if e != nil {
 			return result, queryError("invalid_record", false)
 		}
@@ -209,7 +252,8 @@ func (c *Client) Fetch(ctx context.Context, start, end int64) (result Result, er
 			result.Operational++
 			continue
 		}
-		if Excluded(record.Message, excluded) {
+		if (record.gatehouse && routes[record.route]) ||
+			(!record.gatehouse && len(routers) > 0 && Excluded(record.Message, routers)) {
 			result.Excluded++
 			continue
 		}

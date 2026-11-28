@@ -795,12 +795,12 @@ func TestLegacyNonemptyDatabaseAdoptsConfiguredSource(t *testing.T) {
 	if err != nil || events != 1 || copies != 2 {
 		t.Fatalf("legacy events/copies = %d/%d, err = %v", events, copies, err)
 	}
-	var bound sourceIdentity
+	var bound config.Source
 	if err = opened.Store.Get(
 		"source_identity",
 		&bound,
 	); err != nil ||
-		bound != (sourceIdentity{"cluster-a", "namespace-a", "container-a"}) {
+		bound != c.Collection.Source {
 		t.Fatalf("bound identity = %+v, err = %v", bound, err)
 	}
 }

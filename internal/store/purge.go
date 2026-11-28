@@ -29,14 +29,14 @@ func (s *Store) PutContext(ctx context.Context, key string, value any) error {
 	return nil
 }
 
-// PurgeEvents deletes every event whose message matches, together with its
+// PurgeEvents deletes every event whose source identity and message match, together with its
 // change records, in transactions of at most pruneBatchSize events. Committed
 // batches are final, so an interrupted purge resumes by scanning again. Once
 // every event has been checked, key is set to value in the same transaction
 // that removes sources left without events.
 func (s *Store) PurgeEvents(
 	ctx context.Context,
-	match func(string) bool,
+	match func(identity, message string) bool,
 	key string,
 	value any,
 	progress func(),
@@ -106,11 +106,12 @@ func (s *Store) PurgeEvents(
 func (s *Store) matchingEvents(
 	ctx context.Context,
 	after int64,
-	match func(string) bool,
+	match func(identity, message string) bool,
 ) (ids []any, last int64, scanned int, err error) {
 	rows, err := s.DB.QueryContext(
 		ctx,
-		`SELECT id,message FROM events WHERE id>? ORDER BY id LIMIT ?`,
+		`SELECT e.id,COALESCE(s.identity,''),e.message FROM events e
+		LEFT JOIN sources s ON s.id=e.source_id WHERE e.id>? ORDER BY e.id LIMIT ?`,
 		after,
 		purgeScanBatch,
 	)
@@ -119,12 +120,12 @@ func (s *Store) matchingEvents(
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var message string
-		if err = rows.Scan(&last, &message); err != nil {
+		var identity, message string
+		if err = rows.Scan(&last, &identity, &message); err != nil {
 			return nil, 0, 0, storageError(ctx, "database_read")
 		}
 		scanned++
-		if match(message) {
+		if match(identity, message) {
 			ids = append(ids, last)
 		}
 	}

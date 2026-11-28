@@ -25,13 +25,42 @@
 On first startup, accessrelay binds an unbound inherited database to the configured
 cluster, namespace and container. The inherited database does not record this
 identity, so verify that the configured source is the same source used by the
-original collector before starting on a retained database. Later changes to any
-of those three fields are rejected with `source_mismatch`; credentials and
+original collector before starting on a retained database. Credentials and
 connection headers may rotate without changing the binding.
 
 The first run replays retained SQLite records with `restore false`; old GoAccess
 database/report generations are derived caches and are cleaned after a complete
 replacement report is published. Runtime replay files are disposable.
+
+## Add a Gatehouse input
+
+Use `collection.sources` in the app configuration or `config.collection.sources`
+in Helm values. When set, the list takes precedence over `source`. Use the exact
+existing Traefik selector with `format: traefik-clf`, and add the Gatehouse
+selector with `format: gatehouse-json`. Both read through the same VictoriaLogs
+connection file. VictoriaLogs must retain the raw Gatehouse JSON in `_msg` and
+the existing cluster, namespace, and container fields.
+
+```yaml
+config:
+  collection:
+    sources:
+      - {cluster: cluster-1, namespace: traefik, container: traefik, format: traefik-clf}
+      - {cluster: cluster-1, namespace: gatehouse, container: gatehouse, format: gatehouse-json}
+    excludeRoutes: [logs/journald, backup/s3]
+```
+
+Keep the existing `excludeRouters` list. Set `excludeRoutes` to the exact
+Gatehouse route IDs for the same traffic, typically `namespace/name`.
+
+Startup records the additional binding without rewriting retained events
+or the cursor. Reconciliation picks up the new source's older records within
+retention. When Traefik retires, remove its entry from `sources`. The database
+remembers both bindings so you can restore either source using the same
+selector and format. Adding an unfamiliar selector requires at least one
+known input in the same configuration. If you use an older binary for
+rollback, configure its original single input. Gatehouse rows already stored
+in SQLite remain in the replay until retention removes them.
 
 ## rollback
 
@@ -91,9 +120,8 @@ flush successfully before the caller syncs the file and advances its exported
 sequence or starts the renderer. A failed replay remains disposable and is
 rebuilt from SQLite; collection cursor and multiplicity semantics are unchanged.
 
-- `source_mismatch`: restore the cluster, namespace and container settings used
-  when the database was bound. Use separate state for a different source; do not
-  remove the binding to repurpose a populated database.
+- `source_mismatch`: restore a bound cluster, namespace, container and format.
+  Use separate state for an unrelated source.
 - `database_metadata`: preserve the database and inspect an isolated backup;
   missing or malformed fields in an existing source binding are rejected.
 - `backend_request`, `incomplete_response`, `invalid_record`: inspect backend

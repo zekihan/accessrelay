@@ -54,9 +54,11 @@ responses. A response must end normally with complete, bounded NDJSON records.
 Cluster, namespace, and container names use exact field matching. This prevents
 similarly named sources from entering new query results; already retained rows
 are not reclassified and remain subject to normal retention.
-SQLite records the configured source identity and rejects subsequent changes
-with `source_mismatch`. Inherited databases are bound on first upgraded startup;
-verify their original source settings before adoption (see [operations](docs/operations.md)).
+SQLite binds each cluster, namespace and container to its log format. A
+`collection.sources` list lets one query window cover Traefik CLF and Gatehouse
+JSON. Include the existing Traefik input when migrating a bound database.
+After both inputs are bound, either can be removed from collection while its
+stored requests age out normally. See the [migration instructions](docs/operations.md#add-a-gatehouse-input).
 Malformed records, missing source identity, embedded line breaks, oversized
 responses, truncated bodies and redirects fail the complete window. Timeout and
 size failures split windows down to `minimumWindow`. A failed half prevents
@@ -74,9 +76,12 @@ provides no independent unique event ID.
 
 Collection uses an ingestion delay, overlap on polling, bounded initial
 backfill, and periodic reconciliation across retention for older late arrivals.
-Reconciliation does not advance the collection cursor. Operational messages are
-skipped using the inherited CLF shape check. CLF-shaped parsing failures remain
+Reconciliation does not advance the collection cursor. Traffic from a newly
+bound input is picked up by forward polling and by reconciliation across
+retention. Operational messages are skipped. CLF-shaped parsing failures remain
 in the replay and GoAccess's failed-request counts and diagnostic files.
+Gatehouse access records are converted to the existing GoAccess CLF format,
+with their route in the virtual host field.
 `collection.excludeRouters` (Helm: `config.collection.excludeRouters`) lists
 exact Traefik router names, read from the router field near the end of each
 access log line, whose requests are neither stored nor reported; use it for
@@ -84,7 +89,9 @@ machine traffic such as log shipping. When the list gains a router, the next
 start deletes that router's stored events in batches of 1,000 before the
 replay; the applied list is kept in the database, so later starts skip the
 scan. Removing a router lets collection fetch its requests again where the
-backend still retains them.
+backend still retains them. `collection.excludeRoutes` does the same for exact
+Gatehouse route identities such as `logs/journald`; each exclusion list applies to
+its own log format.
 Connection files are reopened before every query, including split queries and
 Kubernetes projected-secret replacements. Backend errors are opaque codes;
 credentials never enter logs, status, metrics or process arguments.
@@ -93,8 +100,9 @@ credentials never enter logs, status, metrics or process arguments.
 
 SQLite `events.sqlite` is authoritative. Accessrelay preserves the original
 Python collector's schema, JSON metadata, digest encoding and `user_version=0`.
-No format migration is required for this release. The original collector can
-reopen the database for rollback. See [compatibility](docs/compatibility.md) and
+The multi-source binding adds metadata without changing the event schema.
+The original collector can reopen the database for rollback.
+See [compatibility](docs/compatibility.md) and
 [upgrade and recovery instructions](docs/operations.md).
 
 Use one replica, `Recreate`, and a retained ReadWriteOnce PVC. The application
